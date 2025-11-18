@@ -1,0 +1,22 @@
+{
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.12",
+  "pythonPlatform": "Linux",
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "pythonVersion": "3.12",
+      "pythonPlatform": "Linux",
+      "python": "/home/web-lp-039/python-tutorials/file-upload-and-fixes/server/.venv/bin/python",
+      "extraPaths": [".", "app", ".venv/lib/python3.12/site-packages"],
+      "venv": ".venv",
+      "venvPath": "."
+    }
+  ],
+  "include": ["main.py"],
+  "exclude": ["**/__pycache__", "**/node_modules", ".venv", "venv"],
+  "typeCheckingMode": "basic",
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false
+}
