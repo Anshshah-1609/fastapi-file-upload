@@ -6,7 +6,7 @@ import {
   startTransition,
 } from "react";
 import { useDropzone } from "react-dropzone";
-import { Upload, FileText, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Upload, FileText, AlertCircle, CheckCircle2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useUploadFileWithSSE } from "@/hooks/useUploadFileWithSSE";
 import { cn } from "@/lib/utils";
@@ -17,6 +17,7 @@ import { toast } from "sonner";
 export const CSVDropzone = () => {
   const [error, setError] = useState<string | null>(null);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [reportFileReference, setReportFileReference] = useState<string | null>(
     null
   );
@@ -50,6 +51,11 @@ export const CSVDropzone = () => {
         }, 0);
       }
 
+      // Clear selected file on successful upload
+      setTimeout(() => {
+        setSelectedFile(null);
+      }, 0);
+
       // Show success message
       startTransition(() => {
         setShowSuccess(true);
@@ -72,38 +78,52 @@ export const CSVDropzone = () => {
     uploadFileWithSSE.progress,
   ]);
 
-  const onDrop = useCallback(
-    async (acceptedFiles: File[]) => {
-      setError(null);
-      setShowSuccess(false);
-      uploadFileWithSSE.reset();
+  const onDrop = useCallback((acceptedFiles: File[]) => {
+    setError(null);
+    setShowSuccess(false);
 
-      if (acceptedFiles.length === 0) {
-        setError("No file selected");
-        return;
+    if (acceptedFiles.length === 0) {
+      setError("No file selected");
+      return;
+    }
+
+    const file = acceptedFiles[0];
+
+    // Validate file extension
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      setError("Only CSV files are allowed");
+      return;
+    }
+
+    // Store the selected file instead of uploading immediately
+    setSelectedFile(file);
+  }, []);
+
+  const handleUploadNow = useCallback(async () => {
+    if (!selectedFile) return;
+
+    setError(null);
+    setShowSuccess(false);
+    uploadFileWithSSE.reset();
+
+    try {
+      await uploadFileWithSSE.upload(selectedFile);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        const error = err as { response?: { data?: { detail?: string } } };
+        setError(error.response?.data?.detail || "Failed to upload file");
       }
+    }
+  }, [selectedFile, uploadFileWithSSE]);
 
-      const file = acceptedFiles[0];
-
-      // Validate file extension
-      if (!file.name.toLowerCase().endsWith(".csv")) {
-        setError("Only CSV files are allowed");
-        return;
-      }
-
-      try {
-        await uploadFileWithSSE.upload(file);
-      } catch (err: unknown) {
-        if (err instanceof Error) {
-          setError(err.message);
-        } else {
-          const error = err as { response?: { data?: { detail?: string } } };
-          setError(error.response?.data?.detail || "Failed to upload file");
-        }
-      }
-    },
-    [uploadFileWithSSE]
-  );
+  const handleClearSelection = useCallback(() => {
+    setSelectedFile(null);
+    setError(null);
+    setShowSuccess(false);
+    uploadFileWithSSE.reset();
+  }, [uploadFileWithSSE]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -112,7 +132,7 @@ export const CSVDropzone = () => {
       "application/vnd.ms-excel": [".csv"],
     },
     maxFiles: 1,
-    disabled: uploadFileWithSSE.isUploading,
+    disabled: uploadFileWithSSE.isUploading || !!selectedFile,
     onDropRejected: (fileRejections) => {
       if (fileRejections.length > 0) {
         const rejection = fileRejections[0];
@@ -131,50 +151,93 @@ export const CSVDropzone = () => {
   const isCompleted = progress?.status === "completed";
   const isError = progress?.status === "error";
 
+  const formatFileSize = (bytes: number): string => {
+    if (bytes === 0) return "0 Bytes";
+    const k = 1024;
+    const sizes = ["Bytes", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
+  };
+
   return (
     <div className="w-full space-y-4">
-      <div
-        {...getRootProps()}
-        className={cn(
-          "border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors",
-          isDragActive
-            ? "border-primary bg-primary/5"
-            : "border-muted-foreground/25 hover:border-primary/50",
-          isUploading && "opacity-50 cursor-not-allowed"
-        )}
-      >
-        <input {...getInputProps()} disabled={isUploading} />
-        <div className="flex flex-col items-center justify-center gap-4">
-          {isUploading ? (
-            <>
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary" />
-              <p className="text-sm text-muted-foreground">
-                {progress?.message || "Processing..."}
+      {!selectedFile && !isUploading && (
+        <div
+          {...getRootProps()}
+          className={cn(
+            "border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors",
+            isDragActive
+              ? "border-primary bg-primary/5"
+              : "border-muted-foreground/25 hover:border-primary/50"
+          )}
+        >
+          <input {...getInputProps()} />
+          <div className="flex flex-col items-center justify-center gap-4">
+            <div className="rounded-full bg-primary/10 p-4">
+              <Upload className="h-8 w-8 text-primary" />
+            </div>
+            <div>
+              <p className="text-sm font-medium">
+                {isDragActive
+                  ? "Drop the CSV file here"
+                  : "Drag & drop a CSV file here, or click to select"}
               </p>
-            </>
-          ) : (
-            <>
-              <div className="rounded-full bg-primary/10 p-4">
-                <Upload className="h-8 w-8 text-primary" />
+              <p className="text-xs text-muted-foreground mt-2">
+                Only CSV files are accepted
+              </p>
+            </div>
+            <Button type="button" variant="outline" size="sm">
+              <FileText className="h-4 w-4" />
+              Select CSV File
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Selected File Preview */}
+      {selectedFile && !isUploading && (
+        <div className="border rounded-lg p-4 bg-card">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="rounded-full bg-primary/10 p-2">
+                <FileText className="h-5 w-5 text-primary" />
               </div>
               <div>
-                <p className="text-sm font-medium">
-                  {isDragActive
-                    ? "Drop the CSV file here"
-                    : "Drag & drop a CSV file here, or click to select"}
-                </p>
-                <p className="text-xs text-muted-foreground mt-2">
-                  Only CSV files are accepted
+                <p className="text-sm font-medium">{selectedFile.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  {formatFileSize(selectedFile.size)}
                 </p>
               </div>
-              <Button type="button" variant="outline" size="sm">
-                <FileText className="h-4 w-4" />
-                Select CSV File
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleClearSelection}
+              >
+                <X className="h-4 w-4 mr-1" />
+                Clear Selection
               </Button>
-            </>
-          )}
+              <Button variant="default" size="sm" onClick={handleUploadNow}>
+                <Upload className="h-4 w-4 mr-1" />
+                Upload Now
+              </Button>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* Uploading State */}
+      {isUploading && (
+        <div className="border-2 border-dashed rounded-lg p-8 text-center">
+          <div className="flex flex-col items-center justify-center gap-4">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary" />
+            <p className="text-sm text-muted-foreground">
+              {progress?.message || "Processing..."}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Progress Bar and Statistics */}
       {isUploading && progress && (
