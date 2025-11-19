@@ -241,6 +241,10 @@ async def analyze_csv_for_nulls_and_duplicates(
 
         # Use pandas duplicated() to find duplicates (excluding first occurrence)
         # This returns a boolean Series where True indicates duplicate rows
+
+        # keep='first' -> Exclude (do NOT mark) the first occurrence of each duplicate group.
+        # keep='last'  -> Exclude (do NOT mark) the last occurrence of each duplicate group.
+        # keep=False (Default) -> Do NOT exclude any occurrence.
         duplicates_mask = valid_df.duplicated(subset=[col], keep='first')
 
         # Count the number of duplicate rows
