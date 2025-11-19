@@ -1,20 +1,21 @@
-[project]
+[tool.poetry]
 name = "file-upload-and-fixes"
 version = "0.1.0"
 description = ""
-authors = [
-    {name = "Ansh Shah"}
-]
-readme = "README.md"
-requires-python = ">=3.12"
-dependencies = [
-    "fastapi (>=0.121.2,<0.122.0)",
-    "uvicorn (>=0.38.0,<0.39.0)",
-    "sqlalchemy (>=2.0.0,<3.0.0)",
-    "psycopg2-binary (>=2.9.0,<3.0.0)",
-    "python-dotenv (>=1.0.0,<2.0.0)",
-    "python-multipart (>=0.0.18,<1.0.0)"
-]
+authors = ["Ansh Shah"]
+package-mode = false
+readme = "../README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+fastapi = ">=0.121.2,<0.122.0"
+uvicorn = ">=0.38.0,<0.39.0"
+sqlalchemy = ">=2.0.0,<3.0.0"
+psycopg2-binary = ">=2.9.0,<3.0.0"
+python-dotenv = ">=1.0.0,<2.0.0"
+python-multipart = ">=0.0.18,<1.0.0"
+cleanlab = ">=2.7.0,<3.0.0"
+pandas = ">=2.0.0,<3.0.0"
 
 
 [build-system]

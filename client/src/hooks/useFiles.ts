@@ -16,14 +16,6 @@ export const useFiles = ({
   });
 };
 
-export const useFile = (fileId: number | null) => {
-  return useQuery({
-    queryKey: ["file", fileId],
-    queryFn: () => (fileId ? fileApi.getFileById(fileId) : null),
-    enabled: !!fileId,
-  });
-};
-
 export const useUploadFile = () => {
   const queryClient = useQueryClient();
 

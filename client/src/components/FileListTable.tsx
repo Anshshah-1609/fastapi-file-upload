@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Eye, ChevronLeft, ChevronRight } from "lucide-react";
+import { Eye, ChevronLeft, ChevronRight, FileText, Trash2 } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -10,23 +10,48 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { useFiles } from "@/hooks/useFiles";
+import { useDeleteFile } from "@/hooks/useDeletefile";
 import { formatDateTime } from "@/lib/date-utils";
 import type { FileResponse } from "@/lib/api";
 import { FileDetailsModal } from "./FileDetailsModal";
+import { CSVReportModal } from "./CSVReportModal";
+import { DeleteFileDialog } from "./DeleteFileDialog";
+import { formatFileSize } from "@/lib/utils";
+import { toast } from "sonner";
 
 export const FileListTable = () => {
   const [page, setPage] = useState(1);
   const [selectedFile, setSelectedFile] = useState<FileResponse | null>(null);
+  const [reportFileReference, setReportFileReference] = useState<string | null>(
+    null
+  );
+  const [fileToDelete, setFileToDelete] = useState<FileResponse | null>(null);
   const limit = 10;
 
   const { data, isLoading, isError } = useFiles({ page, limit });
+  const deleteFile = useDeleteFile();
 
-  const formatFileSize = (bytes: number): string => {
-    if (bytes === 0) return "0 Bytes";
-    const k = 1024;
-    const sizes = ["Bytes", "KB", "MB", "GB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
+  const handleDeleteClick = (file: FileResponse) => {
+    setFileToDelete(file);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!fileToDelete) return;
+
+    try {
+      await deleteFile.mutateAsync(fileToDelete.id);
+      toast.success("File deleted successfully", {
+        description: `${fileToDelete.original_filename} has been permanently deleted.`,
+      });
+      setFileToDelete(null);
+    } catch (error) {
+      toast.error("Failed to delete file", {
+        description:
+          error instanceof Error
+            ? error.message
+            : "An error occurred while deleting the file.",
+      });
+    }
   };
 
   if (isLoading) {
@@ -63,7 +88,7 @@ export const FileListTable = () => {
               <TableHead>File Size</TableHead>
               <TableHead>Content Type</TableHead>
               <TableHead>Uploaded At</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead className="text-center">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -75,15 +100,42 @@ export const FileListTable = () => {
                 <TableCell>{formatFileSize(file.file_size)}</TableCell>
                 <TableCell>{file.content_type}</TableCell>
                 <TableCell>{formatDateTime(file.created_at)}</TableCell>
-                <TableCell className="text-right">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => setSelectedFile(file)}
-                  >
-                    <Eye className="h-4 w-4" />
-                    <span className="sr-only">View details</span>
-                  </Button>
+                <TableCell className="text-center">
+                  <div className="flex items-center justify-center gap-1">
+                    {file.total_rows !== null &&
+                      file.total_rows !== undefined && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() =>
+                            setReportFileReference(file.file_reference)
+                          }
+                          title="View CSV Report"
+                        >
+                          <FileText className="h-4 w-4" />
+                          <span className="sr-only">View report</span>
+                        </Button>
+                      )}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setSelectedFile(file)}
+                      title="View file details"
+                    >
+                      <Eye className="h-4 w-4" />
+                      <span className="sr-only">View details</span>
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => handleDeleteClick(file)}
+                      title="Delete file"
+                      className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      <span className="sr-only">Delete file</span>
+                    </Button>
+                  </div>
                 </TableCell>
               </TableRow>
             ))}
@@ -127,6 +179,23 @@ export const FileListTable = () => {
         <FileDetailsModal
           file={selectedFile}
           onClose={() => setSelectedFile(null)}
+        />
+      )}
+
+      {reportFileReference && (
+        <CSVReportModal
+          fileReference={reportFileReference}
+          onClose={() => setReportFileReference(null)}
+        />
+      )}
+
+      {fileToDelete && (
+        <DeleteFileDialog
+          file={fileToDelete}
+          isOpen={!!fileToDelete}
+          onClose={() => setFileToDelete(null)}
+          onConfirm={handleDeleteConfirm}
+          isDeleting={deleteFile.isPending}
         />
       )}
     </>

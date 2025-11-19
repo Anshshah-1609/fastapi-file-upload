@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.configs import app_config
 from app.database import init_db
-from app.routers import file_router
+from app.routers import file_router, file_upload_router
 from app.logger import get_logger
 from app.database import sync_database
 
@@ -49,3 +49,4 @@ def read_root():
 
 
 app.include_router(file_router)
+app.include_router(file_upload_router)

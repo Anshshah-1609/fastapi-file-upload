@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Toaster } from "sonner";
 import { CSVDropzone } from "@/components/CSVDropzone";
 import { FileListTable } from "@/components/FileListTable";
 
@@ -12,8 +13,6 @@ const queryClient = new QueryClient({
 });
 
 function App() {
-  console.log("App component rendered");
-
   return (
     <QueryClientProvider client={queryClient}>
       <div className="min-h-screen bg-background">
@@ -42,6 +41,7 @@ function App() {
           </div>
         </div>
       </div>
+      <Toaster position="top-right" richColors />
     </QueryClientProvider>
   );
 }

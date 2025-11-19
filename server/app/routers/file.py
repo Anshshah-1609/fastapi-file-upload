@@ -5,11 +5,21 @@ import math
 from pathlib import Path
 from fastapi import APIRouter, File, UploadFile, HTTPException, Depends, Query
 from sqlalchemy.orm import Session
+
 from app.configs import app_config
 from app.database import get_db
 from app.models import FileModel
 from app import schemas
-from app.repository import get_all, get_by_id, create, remove
+from app.logger import get_logger
+from app.repository import (
+    get_all,
+    get_by_id,
+    get_by_reference,
+    create,
+    remove,
+    update_null_count,
+    update_null_count_by_id
+)
 
 router = APIRouter(prefix="/api/files", tags=["Files"])
 
@@ -160,3 +170,128 @@ def get_file_by_id(
         )
 
     return schemas.FileResponse.model_validate(file)
+
+
+@router.get("/reference/{file_reference}/report", response_model=schemas.CSVReportResponse)
+def get_file_report_by_reference(
+    file_reference: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Get CSV analysis report for a file by reference (UUID).
+
+    - Uses file_reference (UUID) to identify the file
+    - Returns analysis report including time consumption, total records,
+      file name, file size, total columns, null records, and duplicate records
+    - Returns 404 if file not found
+    - Returns 400 if file has not been analyzed yet
+    """
+    file = get_by_reference(db, file_reference)
+    if not file:
+        raise HTTPException(
+            status_code=404,
+            detail=f"File with reference '{file_reference}' not found"
+        )
+
+    # Check if file has been analyzed
+    if file.null_count is None or file.total_rows is None or file.total_columns is None or file.analysis_time is None:
+        raise HTTPException(
+            status_code=400,
+            detail="File has not been analyzed yet. Please upload the file with analysis enabled."
+        )
+
+    return schemas.CSVReportResponse(
+        file_id=file.id,
+        original_filename=file.original_filename,
+        file_size=file.file_size,
+        total_records=file.total_rows if file.total_rows is not None else 0,
+        total_columns=file.total_columns if file.total_columns is not None else 0,
+        null_records=file.null_count if file.null_count is not None else 0,
+        duplicate_records=file.duplicate_records if file.duplicate_records else {},
+        time_consumption=file.analysis_time,
+        created_at=file.created_at
+    )
+
+
+# @router.patch("/reference/{file_reference}/null-count", response_model=schemas.UpdateNullCountResponse)
+# def update_file_null_count(
+#     file_reference: str,
+#     request: schemas.UpdateNullCountRequest,
+#     db: Session = Depends(get_db)
+# ):
+#     """
+#     Update null_count for a file using its reference (UUID).
+
+#     - Uses file_reference (UUID) to identify the file
+#     - Updates the null_count in the database
+#     - Returns updated file information
+
+#     This endpoint allows updating null_count without exposing the file ID.
+#     """
+#     file = update_null_count(db, file_reference, request.null_count)
+
+#     return schemas.UpdateNullCountResponse(
+#         message="Null count updated successfully",
+#         file_id=file.id,
+#         file_reference=file.file_reference,
+#         null_count=file.null_count
+#     )
+
+
+# @router.patch("/{file_id}/null-count", response_model=schemas.UpdateNullCountResponse)
+# def update_file_null_count_by_id(
+#     file_id: int,
+#     request: schemas.UpdateNullCountRequest,
+#     db: Session = Depends(get_db)
+# ):
+#     """
+#     Update null_count for a file using its ID.
+
+#     - Uses file_id to identify the file
+#     - Updates the null_count in the database
+#     - Returns updated file information
+#     """
+#     file = update_null_count_by_id(db, file_id, request.null_count)
+
+#     return schemas.UpdateNullCountResponse(
+#         message="Null count updated successfully",
+#         file_id=file.id,
+#         file_reference=file.file_reference or "",
+#         null_count=file.null_count
+#     )
+
+
+@router.delete("/{file_id}")
+def delete_file(
+    file_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Delete a file by its ID.
+
+    - Deletes the file from the uploads folder (disk)
+    - Deletes the file record from the database
+    - Returns 404 if file not found
+    - Returns success message on successful deletion
+
+    Note: If file deletion from disk fails, the database record will still be deleted.
+    """
+    try:
+        deleted_file = remove(db, file_id, delete_file_from_disk=True)
+
+        return {
+            "message": "File deleted successfully",
+            "file_id": deleted_file.id,
+            "original_filename": deleted_file.original_filename,
+            "stored_filename": deleted_file.stored_filename
+        }
+    except HTTPException as e:
+        # Re-raise HTTP exceptions (like 404)
+        raise e
+    except Exception as e:
+        logger = get_logger(__name__)
+        logger.error(f"Error deleting file {file_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete file: {str(e)}"
+        )

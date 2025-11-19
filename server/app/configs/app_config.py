@@ -45,7 +45,7 @@ class AppConfig:
         self.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
         self.MAX_FILE_SIZE: int = int(self.get_os_optional(
-            "MAX_FILE_SIZE", "10485760"))  # 10 MB in bytes
+            "MAX_FILE_SIZE", "20971520"))  # 20 MB in bytes
 
         # Application configuration
         self.DEBUG: bool = self.get_os_optional(

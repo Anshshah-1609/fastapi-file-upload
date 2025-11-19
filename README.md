@@ -55,11 +55,7 @@ cd server
 poetry install
 ```
 
-3. Activate the virtual environment:
-
-```bash
-poetry shell
-```
+**Important:** This project uses Poetry for dependency management. All packages are installed in Poetry's virtual environment (`.venv`). Always use `poetry run` or activate the Poetry shell to ensure you're using the correct Python environment.
 
 4. Create a `.env` file in the `server/app` directory with the following variables:
 
@@ -95,11 +91,27 @@ npm install
 
 ### Start the Backend
 
-From the `server` directory:
+From the `server` directory, you have several options:
+
+**Option 1: Using the run script (Recommended)**
+
+```bash
+./run.sh
+# or
+python run.py
+```
+
+**Option 2: Using Poetry directly**
 
 ```bash
 poetry shell
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+**Option 3: Using Poetry run (without activating shell)**
+
+```bash
+poetry run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 The API will be available at `http://localhost:8000`
@@ -178,6 +190,42 @@ The application uses a `files` table with the following structure:
 - `created_at` (DateTime) - Creation timestamp
 - `updated_at` (DateTime) - Last update timestamp
 
+## Adding New Python Packages
+
+**Important:** Always use Poetry to add new packages. This ensures packages are installed in the correct virtual environment and `pyproject.toml` is updated automatically.
+
+### Using the Helper Script (Recommended)
+
+```bash
+cd server
+./add_package.sh <package_name> [version_constraint]
+```
+
+Examples:
+
+```bash
+./add_package.sh requests
+./add_package.sh pandas ">=2.0.0,<3.0.0"
+```
+
+### Using Poetry Directly
+
+```bash
+cd server
+poetry add <package_name>
+# or with version constraint
+poetry add "<package_name>>=2.0.0,<3.0.0"
+```
+
+After adding a package, Poetry will:
+
+- Install it in the virtual environment (`.venv`)
+- Update `pyproject.toml`
+- Update `poetry.lock`
+- The helper script also updates `requirements.txt`
+
+**Never install packages directly with `pip install`** - always use Poetry to maintain consistency.
+
 ## Development Notes
 
 - The database tables are automatically created on application startup using `sync_database()`
@@ -186,6 +234,7 @@ The application uses a `files` table with the following structure:
   - File size (default max: 10MB, configurable)
 - Uploaded files are stored with UUID-based filenames to prevent conflicts
 - The application uses SQLAlchemy ORM with a repository pattern for data access
+- **Always use Poetry's virtual environment** - packages are installed in `.venv`, not system Python
 
 ## Environment Variables
 

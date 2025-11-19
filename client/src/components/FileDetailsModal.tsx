@@ -8,21 +8,14 @@ import {
 } from "@/components/ui/dialog";
 import { formatDateTimeWithSeconds } from "@/lib/date-utils";
 import type { FileResponse } from "@/lib/api";
-
-function formatFileSize(bytes: number): string {
-  if (bytes === 0) return "0 Bytes";
-  const k = 1024;
-  const sizes = ["Bytes", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
-}
+import { formatFileSize } from "@/lib/utils";
 
 interface FileDetailsModalProps {
   file: FileResponse;
   onClose: () => void;
 }
 
-export function FileDetailsModal({ file, onClose }: FileDetailsModalProps) {
+export const FileDetailsModal = ({ file, onClose }: FileDetailsModalProps) => {
   return (
     <Dialog open={!!file} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-2xl">
@@ -101,4 +94,4 @@ export function FileDetailsModal({ file, onClose }: FileDetailsModalProps) {
       </DialogContent>
     </Dialog>
   );
-}
+};
