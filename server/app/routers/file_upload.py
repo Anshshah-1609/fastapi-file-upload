@@ -124,7 +124,7 @@ async def analyze_csv_for_nulls_and_duplicates(
         await update_callback({
             "status": "analyzing",
             "progress": 0.1,
-            "message": "Reading CSV file...",
+            "message": "Reading and parsing CSV file structure...",
             "null_count": 0,
             "processed_count": 0,
             "total_rows": None
@@ -146,13 +146,12 @@ async def analyze_csv_for_nulls_and_duplicates(
         await update_callback({
             "status": "analyzing",
             "progress": 0.2,
-            "message": f"CSV loaded. Analyzing {total_rows} rows and {total_columns} columns...",
+            "message": f"CSV file successfully loaded. Beginning comprehensive analysis of {total_rows:,} rows across {total_columns} columns...",
             "null_count": 0,
             "processed_count": 0,
             "total_rows": total_rows,
             "total_columns": total_columns
         })
-        await asyncio.sleep(update_interval)
 
     null_mask = df.isnull().any(axis=1) | df.isna().any(axis=1)
 
@@ -162,7 +161,7 @@ async def analyze_csv_for_nulls_and_duplicates(
         await update_callback({
             "status": "analyzing",
             "progress": 0.3,
-            "message": "Checking for null/NaN values...",
+            "message": "Scanning dataset for null, undefined, and missing values across all columns...",
             "null_count": 0,
             "processed_count": 0,
             "total_rows": total_rows
@@ -184,12 +183,11 @@ async def analyze_csv_for_nulls_and_duplicates(
             await update_callback({
                 "status": "analyzing",
                 "progress": round_progress(min(column_progress, 0.8)),
-                "message": f"Analyzing column {idx + 1}/{total_object_columns}: {col}...",
+                "message": f"Examining column {idx + 1} of {total_object_columns}: '{col}' for string-based null representations...",
                 "null_count": int(null_mask.sum()),
                 "processed_count": total_rows,  # All rows processed for this column
                 "total_rows": total_rows
             })
-            await asyncio.sleep(update_interval)
 
     # Step 4: Final null count
     null_count = null_mask.sum()
@@ -202,54 +200,78 @@ async def analyze_csv_for_nulls_and_duplicates(
         await update_callback({
             "status": "analyzing",
             "progress": 0.85,
-            "message": "Checking for duplicate records...",
+            "message": "Performing parallel duplicate detection across all columns to identify repeated values...",
             "null_count": int(null_count),
             "processed_count": total_rows,
             "total_rows": total_rows,
             "total_columns": total_columns
         })
-        await asyncio.sleep(update_interval)
 
     duplicate_records: dict[str, int] = {}
 
-    # Check for duplicates in each column
-    # Exclude null, undefined, NaN, None, and empty strings from duplicate detection
-    for col in df.columns:
-        # Create a filtered series excluding null/undefined values
-        col_series = df[col].copy()
+    def check_column_duplicates(col: str, df_subset: pd.DataFrame) -> tuple[str, int]:
+        """
+        Check for duplicates in a single column using pandas duplicated() function.
 
-        # Filter out pandas null/NaN values
-        mask = col_series.notna() & col_series.notnull()
+        Args:
+            col: Column name
+            df_subset: DataFrame containing only the column to check
+
+        Returns:
+            Tuple of (column_name, duplicate_count) or (column_name, 0) if no duplicates
+        """
+        # Filter out null/undefined values first
+        # Create a mask for valid (non-null-like) values
+        mask = df_subset[col].notna() & df_subset[col].notnull()
 
         # For object (string) columns, also filter out string representations of null/undefined
-        if col_series.dtype == 'object':
-            # Convert to string and check for null-like string values
-            # Note: We need to handle pandas NaN values that become "nan" string
-            str_values = col_series.astype(str)
+        if df_subset[col].dtype == 'object':
+            str_values = df_subset[col].astype(str)
             # Filter out null-like string values (case-insensitive)
             null_like_mask = str_values.str.lower().isin(
                 ['null', 'none', 'undefined', 'nan', ''])
             mask = mask & ~null_like_mask
 
-        # Get valid values from the column (non-null-like values)
-        valid_series = col_series[mask]
+        # Get DataFrame with only valid (non-null-like) values
+        valid_df = df_subset[mask].copy()
 
-        # Check for duplicates only in valid (non-null-like) values
-        if len(valid_series) > 0:
-            # Count occurrences of each value
-            value_counts = valid_series.value_counts()
+        # Check if there are any valid values
+        if len(valid_df) == 0:
+            return (col, 0)
 
-            # Find values that appear more than once (duplicates)
-            duplicate_value_counts = value_counts[value_counts > 1]
+        # Use pandas duplicated() to find duplicates (excluding first occurrence)
+        # This returns a boolean Series where True indicates duplicate rows
+        duplicates_mask = valid_df.duplicated(subset=[col], keep='first')
 
-            # Count how many distinct values are duplicated
-            duplicate_count = len(duplicate_value_counts)
+        # Count the number of duplicate rows
+        duplicate_count = duplicates_mask.sum()
 
-            # Only include columns that have duplicates
-            if duplicate_count > 0:
-                duplicate_records[col] = duplicate_count
-                logger.debug(
-                    f"Found {duplicate_count} duplicate values in column '{col}'")
+        # Return the count if duplicates found
+        if duplicate_count > 0:
+            return (col, int(duplicate_count))
+
+        return (col, 0)
+
+    # Process all columns in parallel using asyncio.gather with thread pool
+    logger.debug(
+        f"Processing {len(df.columns)} columns in parallel for duplicate detection using pandas duplicated()")
+
+    # Create tasks for parallel execution
+    # Each task processes a single column by creating a subset DataFrame
+    tasks = [
+        asyncio.to_thread(check_column_duplicates, col, df[[col]])
+        for col in df.columns
+    ]
+
+    # Execute all column checks in parallel
+    results = await asyncio.gather(*tasks)
+
+    # Process results and build duplicate_records dictionary
+    for col, duplicate_count in results:
+        if duplicate_count > 0:
+            duplicate_records[col] = duplicate_count
+            logger.debug(
+                f"Found {duplicate_count} duplicate rows in column '{col}'")
 
     total_duplicate_columns = len(duplicate_records)
     logger.info(
@@ -260,8 +282,8 @@ async def analyze_csv_for_nulls_and_duplicates(
         await update_callback({
             "status": "analyzing",
             "progress": 0.9,
-            "message": f"Analysis complete. Found {null_count} rows with null/undefined values. "
-                      f"Found duplicates in {total_duplicate_columns} column(s).",
+            "message": f"Data quality analysis completed successfully. Identified {null_count:,} rows containing null or undefined values. "
+                      f"Detected duplicate entries in {total_duplicate_columns} column(s). Generating comprehensive report...",
             "null_count": int(null_count),
             "processed_count": total_rows,
             "total_rows": total_rows,
@@ -355,10 +377,9 @@ async def validate_and_read_file(
     yield await send_sse_event(create_upload_progress_event(
         status="uploading",
         progress=0.0,
-        message="Validating file type...",
+        message="Validating file format and ensuring CSV compatibility...",
         **progress_data
     ))
-    await asyncio.sleep(update_interval)
     validate_csv_file(file)
 
     # Step 2: Read file content
@@ -366,7 +387,7 @@ async def validate_and_read_file(
     yield await send_sse_event(create_upload_progress_event(
         status="uploading",
         progress=0.1,
-        message="Reading file content...",
+        message="Reading and processing uploaded file content into memory...",
         **progress_data
     ))
     await asyncio.sleep(update_interval)
@@ -385,7 +406,7 @@ async def validate_and_read_file(
     yield await send_sse_event(create_upload_progress_event(
         status="uploading",
         progress=0.2,
-        message="Validating file size...",
+        message="Validating file size against maximum allowed limits...",
         **progress_data
     ))
     await asyncio.sleep(update_interval)
@@ -421,7 +442,7 @@ async def save_file_to_disk(
     yield await send_sse_event(create_upload_progress_event(
         status="uploading",
         progress=0.3,
-        message="Generating unique filename...",
+        message="Generating secure unique identifier for file storage...",
         **progress_data
     ))
     await asyncio.sleep(update_interval)
@@ -436,7 +457,7 @@ async def save_file_to_disk(
     yield await send_sse_event(create_upload_progress_event(
         status="uploading",
         progress=0.5,
-        message="Saving file to disk...",
+        message="Writing file to secure storage location on server...",
         **progress_data
     ))
     await asyncio.sleep(update_interval)
@@ -454,7 +475,7 @@ async def save_file_to_disk(
         yield await send_sse_event(create_upload_progress_event(
             status="error",
             progress=0.0,
-            message=f"Failed to save file: {str(e)}",
+            message=f"Error occurred while saving file to disk: {str(e)}. Please try again or contact support if the issue persists.",
             **progress_data
         ))
         raise
@@ -466,7 +487,6 @@ async def store_file_metadata(
     file_path: Path,
     file_size: int,
     db: Session,
-    update_interval: float,
     progress_data: dict,
     result: dict
 ):
@@ -479,7 +499,6 @@ async def store_file_metadata(
         file_path: Path where file is saved
         file_size: Size of the file in bytes
         db: Database session
-        update_interval: Interval between progress updates
         progress_data: Dictionary to track progress state
         result: Dictionary to store results (will contain 'db_file')
 
@@ -493,10 +512,9 @@ async def store_file_metadata(
     yield await send_sse_event(create_upload_progress_event(
         status="uploading",
         progress=0.7,
-        message="Storing file metadata in database...",
+        message="Persisting file metadata and creating database records...",
         **progress_data
     ))
-    await asyncio.sleep(update_interval)
 
     try:
         # Generate unique file reference (UUID) for this file
@@ -528,7 +546,7 @@ async def store_file_metadata(
         yield await send_sse_event(create_upload_progress_event(
             status="error",
             progress=0.0,
-            message=f"Failed to store file metadata in database: {str(e)}",
+            message=f"Database operation failed while storing file metadata: {str(e)}. The file has been removed from disk. Please try again.",
             **progress_data
         ))
         raise
@@ -584,7 +602,8 @@ async def run_csv_analysis_with_streaming(
         event_data = create_upload_progress_event(
             status=update_data.get("status", "analyzing"),
             progress=update_data.get("progress", 0.0),
-            message=update_data.get("message", "Analyzing CSV..."),
+            message=update_data.get(
+                "message", "Performing comprehensive CSV data analysis..."),
             file_id=db_file.id,
             file_reference=db_file.file_reference,
             **progress_data
@@ -751,7 +770,7 @@ async def upload_file_with_sse_stream(
         phase3_result = {}
         gen3 = store_file_metadata(
             file, unique_filename, file_path, file_size,
-            db, update_interval, progress_data, phase3_result
+            db, progress_data, phase3_result
         )
         async for event in gen3:
             yield event
@@ -766,7 +785,7 @@ async def upload_file_with_sse_stream(
         yield await send_sse_event(create_upload_progress_event(
             status="uploading",
             progress=1.0,
-            message="Upload phase complete. Starting analysis...",
+            message="File upload completed successfully. Initiating comprehensive data quality analysis...",
             file_id=db_file.id,
             file_reference=db_file.file_reference,
             **progress_data
@@ -814,7 +833,7 @@ async def upload_file_with_sse_stream(
             yield await send_sse_event(create_upload_progress_event(
                 status="error",
                 progress=0.7,
-                message=f"Failed to analyze CSV: {str(e)}",
+                message=f"Data analysis encountered an error: {str(e)}. The file has been uploaded but analysis could not be completed. Please review the file format and try again.",
                 **progress_data
             ))
             return
@@ -833,11 +852,9 @@ async def upload_file_with_sse_stream(
         yield await send_sse_event(create_upload_progress_event(
             status="completed",
             progress=1.0,
-            message="File uploaded and analyzed successfully",
+            message="File upload and data quality analysis completed successfully. Your comprehensive report is ready for review.",
             file_id=db_file.id,
             file_reference=db_file.file_reference,
-            total_columns=total_columns,
-            duplicate_records=duplicate_records,
             **{**progress_data,
                "original_filename": file.filename,
                "stored_filename": unique_filename,
@@ -863,7 +880,7 @@ async def upload_file_with_sse_stream(
         yield await send_sse_event(create_upload_progress_event(
             status="error",
             progress=0.0,
-            message=f"Unexpected error: {str(e)}",
+            message=f"An unexpected error occurred during file processing: {str(e)}. Please try again or contact support if the problem persists.",
             null_count=0,
             processed_count=0,
             total_rows=None
