@@ -46,6 +46,9 @@ class FileModel(Base):
     # Analysis time in seconds
     # Store as string to preserve precision
     analysis_time = Column(String(20), nullable=True)
+    # Peak memory usage during analysis in MB
+    # Store as string to preserve precision
+    memory_usage_mb = Column(String(20), nullable=True)
     # Duplicate records count per column
     # Format: {"column_name": count, ...} e.g., {"email": 10, "phone": 22}
     duplicate_records = Column(JSONEncodedDict, nullable=True)

@@ -36,6 +36,7 @@ export interface CSVReportResponse {
   duplicate_records?: Record<string, number> | null;
   time_consumption: string;
   created_at: string;
+  memory_usage_mb?: string | null;
 }
 
 export interface FileListResponse {

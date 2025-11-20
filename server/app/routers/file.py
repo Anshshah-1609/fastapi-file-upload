@@ -186,7 +186,7 @@ def get_file_report_by_reference(
 
     - Uses file_reference (UUID) to identify the file
     - Returns analysis report including time consumption, total records,
-      file name, file size, total columns, null records, and duplicate records
+      file name, file size, total columns, null records, duplicate records, and memory usage
     - Returns 404 if file not found
     - Returns 400 if file has not been analyzed yet
     """
@@ -213,6 +213,7 @@ def get_file_report_by_reference(
         null_records=file.null_count if file.null_count is not None else 0,
         duplicate_records=file.duplicate_records if file.duplicate_records else {},
         time_consumption=file.analysis_time,
+        memory_usage_mb=file.memory_usage_mb,
         created_at=file.created_at
     )
 

@@ -24,6 +24,7 @@ class FileResponse(BaseModel):
     total_rows: int | None = None
     total_columns: int | None = None
     analysis_time: str | None = None  # Time in seconds as string
+    memory_usage_mb: str | None = None  # Peak memory usage in MB as string
     # Format: {"column_name": count}
     duplicate_records: Dict[str, int] | None = None
     created_at: datetime
@@ -86,6 +87,7 @@ class CSVReportResponse(BaseModel):
     # Format: {"column_name": count}
     duplicate_records: Dict[str, int] | None = None
     time_consumption: str  # Time in seconds as string
+    memory_usage_mb: str | None = None  # Peak memory usage in MB as string
     created_at: datetime
 
 

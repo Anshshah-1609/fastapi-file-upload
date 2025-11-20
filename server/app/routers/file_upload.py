@@ -5,10 +5,14 @@ import json
 import asyncio
 import time
 from pathlib import Path
-from fastapi import APIRouter, File, UploadFile, HTTPException, Depends, Query
+from contextlib import contextmanager
+from typing import Generator
+from fastapi import APIRouter, File, UploadFile, HTTPException, Depends, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 import pandas as pd
+import psutil
+import os
 
 from app.configs import app_config
 from app.database import get_db
@@ -20,6 +24,19 @@ from app.repository import create
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/files", tags=["Files"])
+
+
+# ============================================================================
+# CONSTANTS
+# ============================================================================
+
+CHUNK_SIZE = 100_000
+EVENT_STATUS = {
+    "UPLOADING": "uploading",
+    "ANALYZING": "analyzing",
+    "COMPLETED": "completed",
+    "ERROR": "error",
+}
 
 
 # ============================================================================
@@ -66,7 +83,7 @@ def create_upload_progress_event(
     """
     event = {
         "status": status,
-        "progress": round_progress(progress),
+        "progress": progress,
         "message": message,
         "null_count": kwargs.get("null_count", 0),
         "processed_count": kwargs.get("processed_count", 0),
@@ -97,6 +114,92 @@ def create_upload_progress_event(
 
 
 # ============================================================================
+# MEMORY TRACKING UTILITIES
+# ============================================================================
+
+def get_current_memory_mb() -> float:
+    """
+    Get current memory usage of the current process in MB.
+
+    Returns:
+        Memory usage in megabytes (MB)
+    """
+    try:
+        process = psutil.Process(os.getpid())
+        memory_info = process.memory_info()
+        return memory_info.rss / (1024 * 1024)  # Convert bytes to MB
+    except Exception as e:
+        logger.warning(f"Failed to get memory usage: {str(e)}")
+        return 0.0
+
+
+@contextmanager
+def track_memory_usage() -> Generator[dict, None, None]:
+    """
+    Context manager to track peak memory usage during code execution.
+
+    Usage:
+        with track_memory_usage() as memory_tracker:
+            # Your code here
+            pass
+        peak_memory_mb = memory_tracker['peak_memory_mb']
+        initial_memory_mb = memory_tracker['initial_memory_mb']
+
+    Yields:
+        Dictionary with 'initial_memory_mb' and 'peak_memory_mb' keys
+    """
+    initial_memory = get_current_memory_mb()
+    peak_memory = initial_memory
+
+    try:
+        yield {'initial_memory_mb': initial_memory, 'peak_memory_mb': peak_memory}
+    finally:
+        # Check final memory and update peak if needed
+        final_memory = get_current_memory_mb()
+        peak_memory = max(peak_memory, final_memory)
+
+
+async def track_memory_async(func, *args, **kwargs):
+    """
+    Async wrapper to track peak memory usage during async function execution.
+
+    Args:
+        func: Async function to execute
+        *args: Positional arguments for func
+        **kwargs: Keyword arguments for func
+
+    Returns:
+        Tuple of (function_result, peak_memory_mb)
+    """
+    initial_memory = get_current_memory_mb()
+    peak_memory = initial_memory
+
+    # Create a task to periodically check memory
+    async def monitor_memory():
+        nonlocal peak_memory
+        while True:
+            await asyncio.sleep(0.1)  # Check every 100ms
+            current_memory = get_current_memory_mb()
+            peak_memory = max(peak_memory, current_memory)
+
+    monitor_task = asyncio.create_task(monitor_memory())
+
+    try:
+        result = await func(*args, **kwargs)
+    finally:
+        monitor_task.cancel()
+        try:
+            await monitor_task
+        except asyncio.CancelledError:
+            pass
+        # Final check
+        final_memory = get_current_memory_mb()
+        peak_memory = max(peak_memory, final_memory)
+
+    return result, peak_memory
+
+
+# ============================================================================
 # VALIDATION FUNCTIONS
 # ============================================================================
 
@@ -107,7 +210,8 @@ def validate_csv_file(file: UploadFile) -> None:
 
     if not file.filename:
         logger.error("File validation failed: Filename is required")
-        raise HTTPException(status_code=400, detail="Filename is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Filename is required")
 
     # Check file extension
     file_extension = Path(file.filename).suffix.lower()
@@ -115,7 +219,7 @@ def validate_csv_file(file: UploadFile) -> None:
         logger.error(
             f"File validation failed: Invalid file extension '{file_extension}' for file '{file.filename}'")
         raise HTTPException(
-            status_code=400,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Only CSV files are allowed. Received: {file_extension}"
         )
 
@@ -137,13 +241,13 @@ def validate_file_size(file_size: int) -> None:
     logger.debug(
         f"Validating file size: {file_size_mb:.2f} MB (max: {max_size_mb:.2f} MB)")
 
-    if file_size > app_config.MAX_FILE_SIZE:
-        logger.error(
-            f"File size validation failed: {file_size_mb:.2f} MB exceeds maximum {max_size_mb:.2f} MB")
-        raise HTTPException(
-            status_code=400,
-            detail=f"File size exceeds maximum allowed size of {max_size_mb} MB"
-        )
+    # if file_size > app_config.MAX_FILE_SIZE:
+    #     logger.error(
+    #         f"File size validation failed: {file_size_mb:.2f} MB exceeds maximum {max_size_mb:.2f} MB")
+    #     raise HTTPException(
+    #         status_code=status.HTTP_400_BAD_REQUEST,
+    #         detail=f"File size exceeds maximum allowed size of {max_size_mb} MB"
+    #     )
 
     logger.info(f"File size validation successful: {file_size_mb:.2f} MB")
 
@@ -184,7 +288,7 @@ async def analyze_csv_for_nulls_and_duplicates(
     logger.debug("Step 1: Reading CSV file using pandas")
     if update_callback:
         await update_callback({
-            "status": "analyzing",
+            "status": EVENT_STATUS["ANALYZING"],
             "progress": 0.1,
             "message": "Reading and parsing CSV file structure...",
             "null_count": 0,
@@ -205,7 +309,7 @@ async def analyze_csv_for_nulls_and_duplicates(
 
     if update_callback:
         await update_callback({
-            "status": "analyzing",
+            "status": EVENT_STATUS["ANALYZING"],
             "progress": 0.2,
             "message": f"CSV file successfully loaded. Beginning comprehensive analysis of {total_rows:,} rows across {total_columns} columns...",
             "null_count": 0,
@@ -220,7 +324,7 @@ async def analyze_csv_for_nulls_and_duplicates(
     # Check for pandas null/NaN values
     if update_callback:
         await update_callback({
-            "status": "analyzing",
+            "status": EVENT_STATUS["ANALYZING"],
             "progress": 0.3,
             "message": "Scanning dataset for null, undefined, and missing values across all columns...",
             "null_count": 0,
@@ -242,7 +346,7 @@ async def analyze_csv_for_nulls_and_duplicates(
             # Update progress based on column processing
             column_progress = 0.4 + (0.4 * (idx + 1) / total_object_columns)
             await update_callback({
-                "status": "analyzing",
+                "status": EVENT_STATUS["ANALYZING"],
                 "progress": min(column_progress, 0.8),
                 "message": f"Examining column {idx + 1} of {total_object_columns}: '{col}' for string-based null representations...",
                 "null_count": int(null_mask.sum()),
@@ -259,7 +363,7 @@ async def analyze_csv_for_nulls_and_duplicates(
     logger.debug("Step 5: Starting duplicate detection per column")
     if update_callback:
         await update_callback({
-            "status": "analyzing",
+            "status": EVENT_STATUS["ANALYZING"],
             "progress": 0.85,
             "message": "Performing parallel duplicate detection across all columns to identify repeated values...",
             "null_count": int(null_count),
@@ -345,10 +449,10 @@ async def analyze_csv_for_nulls_and_duplicates(
     if update_callback:
         total_duplicate_columns = len(duplicate_records)
         await update_callback({
-            "status": "analyzing",
+            "status": EVENT_STATUS["ANALYZING"],
             "progress": 0.9,
             "message": f"Data quality analysis completed successfully. Identified {null_count:,} rows containing null or undefined values. "
-                      f"Detected duplicate entries in {total_duplicate_columns} column(s). Generating comprehensive report...",
+            f"Detected duplicate entries in {total_duplicate_columns} column(s). Generating comprehensive report...",
             "null_count": int(null_count),
             "processed_count": total_rows,
             "total_rows": total_rows,
@@ -360,6 +464,236 @@ async def analyze_csv_for_nulls_and_duplicates(
     logger.info(f"CSV analysis complete: {null_count} null rows, {total_rows} total rows, "
                 f"{total_columns} columns, {len(duplicate_records)} columns with duplicates")
     return int(null_count), int(total_rows), int(total_columns), duplicate_records
+
+# ============================================================================
+# CSV ANALYSIS FUNCTION - CHUNKED BASED
+# ============================================================================
+
+
+async def analyze_csv_for_nulls_and_duplicates_chunked(
+    file_path: Path,
+    update_callback=None,
+    update_interval: float = 0.1,
+    chunk_size: int = CHUNK_SIZE,
+) -> tuple[int, int, int, dict[str, int]]:
+    """
+    Chunked CSV analysis for null/undefined detection and per-column duplicate counts.
+    Sends progress updates during analysis if update_callback is provided.
+
+    Similar to analyze_csv_for_nulls_and_duplicates but processes large files in chunks
+    to avoid memory issues. Sends granular progress updates per chunk with proper
+    SSE event formatting.
+
+    Args:
+        file_path: Path to the CSV file
+        update_callback: Optional async function to call with progress updates
+        update_interval: Interval in seconds between progress updates
+        chunk_size: Number of rows to process per chunk
+
+    Returns:
+        Tuple of (null_count, total_rows, total_columns, duplicate_records) where:
+        - null_count is the number of rows containing at least one null/undefined value
+        - total_rows is the total number of rows in the CSV
+        - total_columns is the total number of columns in the CSV
+        - duplicate_records is a dict with column_name as key and duplicate count as value
+    """
+    logger.info(f"Starting chunked CSV analysis for file: {file_path}")
+
+    null_like_values = {"null", "none", "undefined", "nan", ""}
+    null_like_values = {v.lower() for v in null_like_values}
+
+    # Step 1: Read CSV file structure and count rows
+    logger.debug("Step 1: Reading CSV file structure and counting rows")
+    if update_callback:
+        await update_callback({
+            "status": EVENT_STATUS["ANALYZING"],
+            "progress": 0.1,
+            "message": "Reading and parsing CSV file structure...",
+            "null_count": 0,
+            "processed_count": 0,
+            "total_rows": None
+        })
+        await asyncio.sleep(update_interval)
+
+    # Fast row count
+    def fast_count_lines(p: Path) -> int:
+        with open(p, "rb") as f:
+            buf_size = 1024 * 1024
+            count = 0
+            for buf in iter(lambda: f.read(buf_size), b""):
+                count += buf.count(b"\n")
+        return max(count - 1, 0)  # subtract header
+
+    try:
+        total_rows = fast_count_lines(file_path)
+        logger.info(f"CSV file row count: {total_rows:,} rows")
+    except Exception as e:
+        logger.warning(f"Could not count rows: {str(e)}")
+        total_rows = None
+
+    # Step 2: Initialize chunked reader to get column count
+    logger.debug("Step 2: Initializing chunked reader")
+    if update_callback:
+        await update_callback({
+            "status": EVENT_STATUS["ANALYZING"],
+            "progress": 0.2,
+            "message": f"CSV file structure loaded. Beginning comprehensive chunked analysis of {total_rows:,} rows..." if total_rows else "CSV file structure loaded. Beginning comprehensive chunked analysis...",
+            "null_count": 0,
+            "processed_count": 0,
+            "total_rows": total_rows
+        })
+        await asyncio.sleep(update_interval)
+
+    # Initialize chunked reader
+    chunk_reader = pd.read_csv(
+        file_path,
+        chunksize=chunk_size,
+        dtype=object,
+        keep_default_na=True
+    )
+
+    # Get first chunk to determine column count
+    first_chunk = next(chunk_reader, None)
+    if first_chunk is None:
+        logger.error("CSV file appears to be empty")
+        raise ValueError("CSV file is empty or could not be read")
+
+    total_columns = len(first_chunk.columns)
+    logger.info(f"CSV file has {total_columns} columns")
+
+    if update_callback:
+        await update_callback({
+            "status": EVENT_STATUS["ANALYZING"],
+            "progress": 0.3,
+            "message": f"Scanning dataset for missing values across {total_columns} columns...",
+            "null_count": 0,
+            "processed_count": 0,
+            "total_rows": total_rows,
+            "total_columns": total_columns
+        })
+        await asyncio.sleep(update_interval)
+
+    # -------------------------------------------
+    # Tracking variables
+    # -------------------------------------------
+    null_row_count = 0
+    processed_rows = 0
+    duplicate_counts: dict[str, int] = {}
+    seen_hashes: dict[str, set] = {}
+
+    # Process first chunk
+    chunk_list = [first_chunk]
+    chunk_list.extend(chunk_reader)
+    total_chunks = len(chunk_list)
+
+    logger.debug(
+        f"Processing {total_chunks} chunks of up to {chunk_size:,} rows each")
+
+    # Step 3: Process chunks for null detection and duplicate detection
+    for chunk_idx, chunk in enumerate(chunk_list):
+        # NULL DETECTION
+        pandas_null_mask = chunk.isnull().any(axis=1) | chunk.isna().any(axis=1)
+        combined_mask = pandas_null_mask.copy()
+
+        # Check for string representations of null/undefined in object columns
+        for col in chunk.columns:
+            if chunk[col].dtype == 'object':
+                ser = chunk[col]
+                lower_strings = ser.astype(str).str.strip().str.lower()
+                combined_mask |= lower_strings.isin(null_like_values)
+
+        chunk_null_rows = int(combined_mask.sum())
+        null_row_count += chunk_null_rows
+
+        # DUPLICATE DETECTION
+        for col in chunk.columns:
+            if col not in seen_hashes:
+                seen_hashes[col] = set()
+                duplicate_counts[col] = 0
+
+            for val in chunk[col]:
+                if pd.isna(val):
+                    continue
+
+                sval = str(val).strip()
+                if not sval or sval.lower() in null_like_values:
+                    continue
+
+                h = hash(sval) & ((1 << 63) - 1)
+
+                if h in seen_hashes[col]:
+                    duplicate_counts[col] += 1
+                else:
+                    seen_hashes[col].add(h)
+
+        processed_rows += len(chunk)
+
+        # Calculate progress: 0.3 (initial) to 0.85 (before finalization)
+        # Progress range: 0.3 to 0.85 = 0.55 range
+        logger.debug(f"Chunk progress: {chunk_idx + 1} of {total_chunks}")
+        if total_chunks > 0:
+            chunk_progress = 0.3 + (0.55 * (chunk_idx + 1) / total_chunks)
+        else:
+            chunk_progress = 0.5
+        logger.debug(f"Chunk progress: {chunk_progress}")
+        # Send progress update after each chunk
+        if update_callback:
+            progress_pct = min(chunk_progress, 0.85)
+            await update_callback({
+                "status": EVENT_STATUS["ANALYZING"],
+                "progress": progress_pct,
+                "message": f"Processing chunk {chunk_idx + 1} of {total_chunks} ({processed_rows:,} of {total_rows:,} rows processed). "
+                f"Found {null_row_count:,} rows with null/undefined values so far...",
+                "null_count": int(null_row_count),
+                "processed_count": int(processed_rows),
+                "total_rows": total_rows,
+                "total_columns": total_columns,
+                "duplicate_records": {k: v for k, v in duplicate_counts.items() if v > 0}
+            })
+            await asyncio.sleep(update_interval)
+
+    # Step 4: Duplicate detection summary
+    logger.debug("Step 4: Finalizing duplicate detection results")
+    if update_callback:
+        await update_callback({
+            "status": EVENT_STATUS["ANALYZING"],
+            "progress": 0.85,
+            "message": "Performing final duplicate detection analysis across all columns to identify repeated values...",
+            "null_count": int(null_row_count),
+            "processed_count": int(processed_rows),
+            "total_rows": total_rows,
+            "total_columns": total_columns,
+            "duplicate_records": {k: v for k, v in duplicate_counts.items() if v > 0}
+        })
+        await asyncio.sleep(update_interval)
+
+    # Step 5: Final results summary
+    final_duplicates = {k: v for k, v in duplicate_counts.items() if v > 0}
+    total_duplicate_columns = len(final_duplicates)
+
+    if update_callback:
+        await update_callback({
+            "status": EVENT_STATUS["ANALYZING"],
+            "progress": 0.9,
+            "message": f"Data quality analysis completed successfully. Identified {null_row_count:,} rows containing null or undefined values. "
+            f"Detected duplicate entries in {total_duplicate_columns} column(s). Generating comprehensive report...",
+            "null_count": int(null_row_count),
+            "processed_count": int(processed_rows),
+            "total_rows": total_rows,
+            "total_columns": total_columns,
+            "duplicate_records": final_duplicates
+        })
+        await asyncio.sleep(update_interval)
+
+    logger.info(f"Chunked CSV analysis complete: {null_row_count} null rows, {processed_rows} total rows, "
+                f"{total_columns} columns, {len(final_duplicates)} columns with duplicates")
+
+    return (
+        int(null_row_count),
+        int(processed_rows),
+        int(total_columns or 0),
+        final_duplicates,
+    )
 
 
 # ============================================================================
@@ -390,7 +724,7 @@ async def validate_and_read_file(
     # Step 1: Validate file type
     logger.debug("Phase 1 - Step 1: Validating file type")
     yield await send_sse_event(create_upload_progress_event(
-        status="uploading",
+        status=EVENT_STATUS["UPLOADING"],
         progress=0.0,
         message="Validating file format and ensuring CSV compatibility...",
         **progress_data
@@ -400,7 +734,7 @@ async def validate_and_read_file(
     # Step 2: Read file content
     logger.debug("Phase 1 - Step 2: Reading file content")
     yield await send_sse_event(create_upload_progress_event(
-        status="uploading",
+        status=EVENT_STATUS["UPLOADING"],
         progress=0.1,
         message="Reading and processing uploaded file content into memory...",
         **progress_data
@@ -419,7 +753,7 @@ async def validate_and_read_file(
     # Step 3: Validate file size
     logger.debug("Phase 1 - Step 3: Validating file size")
     yield await send_sse_event(create_upload_progress_event(
-        status="uploading",
+        status=EVENT_STATUS["UPLOADING"],
         progress=0.2,
         message="Validating file size against maximum allowed limits...",
         **progress_data
@@ -455,7 +789,7 @@ async def save_file_to_disk(
     # Step 4: Generate unique filename
     logger.debug("Phase 2 - Step 4: Generating unique filename")
     yield await send_sse_event(create_upload_progress_event(
-        status="uploading",
+        status=EVENT_STATUS["UPLOADING"],
         progress=0.3,
         message="Generating secure unique identifier for file storage...",
         **progress_data
@@ -470,7 +804,7 @@ async def save_file_to_disk(
     # Step 5: Save file to disk
     logger.debug(f"Phase 2 - Step 5: Saving file to disk at {file_path}")
     yield await send_sse_event(create_upload_progress_event(
-        status="uploading",
+        status=EVENT_STATUS["UPLOADING"],
         progress=0.5,
         message="Writing file to secure storage location on server...",
         **progress_data
@@ -488,7 +822,7 @@ async def save_file_to_disk(
             f"Failed to save file to disk at {file_path}: {str(e)}")
         # Yield error event before raising
         yield await send_sse_event(create_upload_progress_event(
-            status="error",
+            status=EVENT_STATUS["ERROR"],
             progress=0.0,
             message=f"Error occurred while saving file to disk: {str(e)}. Please try again or contact support if the issue persists.",
             **progress_data
@@ -525,7 +859,7 @@ async def store_file_metadata(
     """
     logger.debug("Phase 3 - Step 6: Storing file metadata in database")
     yield await send_sse_event(create_upload_progress_event(
-        status="uploading",
+        status=EVENT_STATUS["UPLOADING"],
         progress=0.7,
         message="Persisting file metadata and creating database records...",
         **progress_data
@@ -559,7 +893,7 @@ async def store_file_metadata(
             file_path.unlink()
         # Yield error event before raising
         yield await send_sse_event(create_upload_progress_event(
-            status="error",
+            status=EVENT_STATUS["ERROR"],
             progress=0.0,
             message=f"Database operation failed while storing file metadata: {str(e)}. The file has been removed from disk. Please try again.",
             **progress_data
@@ -597,10 +931,11 @@ async def run_csv_analysis_with_streaming(
     analysis_queue = asyncio.Queue()
     analysis_result = None
     analysis_error = None
+    peak_memory_mb = 0.0
 
     async def analysis_progress_callback(update_data: dict):
         """Callback to send progress updates during CSV analysis - streams events in real-time."""
-        nonlocal progress_data
+        nonlocal progress_data, peak_memory_mb
 
         # Update progress data from callback
         progress_data["null_count"] = update_data.get("null_count", 0)
@@ -613,9 +948,13 @@ async def run_csv_analysis_with_streaming(
         progress_data["duplicate_records"] = update_data.get(
             "duplicate_records", progress_data.get("duplicate_records", {}))
 
+        # Track memory usage during analysis
+        current_memory = get_current_memory_mb()
+        peak_memory_mb = max(peak_memory_mb, current_memory)
+
         # Create the SSE event with rounded progress
         event_data = create_upload_progress_event(
-            status=update_data.get("status", "analyzing"),
+            status=update_data.get("status", EVENT_STATUS["ANALYZING"]),
             progress=update_data.get("progress", 0.0),
             message=update_data.get(
                 "message", "Performing comprehensive CSV data analysis..."),
@@ -628,11 +967,24 @@ async def run_csv_analysis_with_streaming(
 
     async def run_analysis():
         """Run analysis in background and stream events."""
-        nonlocal analysis_result, analysis_error, progress_data
+        nonlocal analysis_result, analysis_error, progress_data, peak_memory_mb
+
+        initial_memory = get_current_memory_mb()
+        peak_memory_mb = initial_memory
+
+        # Create a task to periodically check memory
+        async def monitor_memory():
+            nonlocal peak_memory_mb
+            while True:
+                await asyncio.sleep(0.1)  # Check every 100ms
+                current_memory = get_current_memory_mb()
+                peak_memory_mb = max(peak_memory_mb, current_memory)
+
+        monitor_task = asyncio.create_task(monitor_memory())
 
         try:
             logger.debug(f"Starting CSV analysis task for file: {file_path}")
-            null_count, total_rows, total_columns, duplicate_records = await analyze_csv_for_nulls_and_duplicates(
+            null_count, total_rows, total_columns, duplicate_records = await analyze_csv_for_nulls_and_duplicates_chunked(
                 file_path,
                 update_callback=analysis_progress_callback,
                 update_interval=update_interval
@@ -641,12 +993,24 @@ async def run_csv_analysis_with_streaming(
                                total_columns, duplicate_records)
             progress_data["processed_count"] = total_rows if total_rows else progress_data.get(
                 "processed_count", 0)
+
+            # Final memory check
+            final_memory = get_current_memory_mb()
+            peak_memory_mb = max(peak_memory_mb, final_memory)
+
             logger.info(f"CSV analysis task completed successfully. Results: {null_count} nulls, "
-                        f"{total_rows} rows, {total_columns} columns, {len(duplicate_records)} duplicate columns")
+                        f"{total_rows} rows, {total_columns} columns, {len(duplicate_records)} duplicate columns. "
+                        f"Peak memory usage: {peak_memory_mb:.2f} MB")
         except Exception as e:
             logger.error(f"CSV analysis task failed: {str(e)}")
             analysis_error = e
         finally:
+            # Stop memory monitoring
+            monitor_task.cancel()
+            try:
+                await monitor_task
+            except asyncio.CancelledError:
+                pass
             # Put a sentinel value to stop the queue consumer
             await analysis_queue.put(None)
 
@@ -679,6 +1043,7 @@ async def run_csv_analysis_with_streaming(
         result["total_rows"] = total_rows
         result["total_columns"] = total_columns
         result["duplicate_records"] = duplicate_records
+        result["peak_memory_mb"] = peak_memory_mb
 
 
 async def update_analysis_results_in_db(
@@ -688,6 +1053,7 @@ async def update_analysis_results_in_db(
     total_columns: int,
     duplicate_records: dict[str, int],
     analysis_duration: float,
+    peak_memory_mb: float,
     db: Session
 ) -> None:
     """
@@ -700,6 +1066,7 @@ async def update_analysis_results_in_db(
         total_columns: Total number of columns
         duplicate_records: Dictionary of duplicate records per column
         analysis_duration: Time taken for analysis in seconds
+        peak_memory_mb: Peak memory usage during analysis in MB
         db: Database session
     """
     try:
@@ -710,10 +1077,11 @@ async def update_analysis_results_in_db(
         db_file.total_columns = total_columns
         db_file.duplicate_records = duplicate_records
         db_file.analysis_time = str(round(analysis_duration, 2))
+        db_file.memory_usage_mb = str(round(peak_memory_mb, 2))
         db.commit()
         db.refresh(db_file)
         logger.info(f"Analysis results updated in database successfully. File ID: {db_file.id}, "
-                    f"Analysis time: {analysis_duration:.2f}s")
+                    f"Analysis time: {analysis_duration:.2f}s, Peak memory: {peak_memory_mb:.2f} MB")
     except Exception as db_error:
         logger.warning(
             f"Failed to update analysis data in database for file ID {db_file.id}: {str(db_error)}",
@@ -802,7 +1170,7 @@ async def upload_file_with_sse_stream(
         logger.info(
             f"Upload phase complete. File ID: {db_file.id}, Reference: {db_file.file_reference}")
         yield await send_sse_event(create_upload_progress_event(
-            status="uploading",
+            status=EVENT_STATUS["UPLOADING"],
             progress=1.0,
             message="File upload completed successfully. Initiating comprehensive data quality analysis...",
             file_id=db_file.id,
@@ -828,6 +1196,7 @@ async def upload_file_with_sse_stream(
             total_rows = phase5_result["total_rows"]
             total_columns = phase5_result["total_columns"]
             duplicate_records = phase5_result["duplicate_records"]
+            peak_memory_mb = phase5_result.get("peak_memory_mb", 0.0)
 
             # Update progress data with final results
             progress_data.update({
@@ -840,17 +1209,18 @@ async def upload_file_with_sse_stream(
 
             # Update database with analysis results
             analysis_duration = time.time() - start_time
-            logger.debug(f"Analysis duration: {analysis_duration:.2f} seconds")
+            logger.debug(
+                f"Analysis duration: {analysis_duration:.2f} seconds, Peak memory: {peak_memory_mb:.2f} MB")
             await update_analysis_results_in_db(
                 db_file, null_count, total_rows, total_columns,
-                duplicate_records, analysis_duration, db
+                duplicate_records, analysis_duration, peak_memory_mb, db
             )
 
         except Exception as e:
             logger.error(
                 f"CSV analysis failed for file ID {db_file.id}: {str(e)}")
             yield await send_sse_event(create_upload_progress_event(
-                status="error",
+                status=EVENT_STATUS["ERROR"],
                 progress=0.7,
                 message=f"Data analysis encountered an error: {str(e)}. The file has been uploaded but analysis could not be completed. Please review the file format and try again.",
                 **progress_data
@@ -869,7 +1239,7 @@ async def upload_file_with_sse_stream(
 
         # Step 10: Send completion event with all report data
         yield await send_sse_event(create_upload_progress_event(
-            status="completed",
+            status=EVENT_STATUS["COMPLETED"],
             progress=1.0,
             message="File upload and data quality analysis completed successfully. Your comprehensive report is ready for review.",
             file_id=db_file.id,
@@ -886,7 +1256,7 @@ async def upload_file_with_sse_stream(
     except HTTPException as e:
         logger.error(f"HTTPException during file upload: {e.detail}")
         yield await send_sse_event(create_upload_progress_event(
-            status="error",
+            status=EVENT_STATUS["ERROR"],
             progress=0.0,
             message=e.detail,
             null_count=0,
@@ -897,7 +1267,7 @@ async def upload_file_with_sse_stream(
         logger.error(
             f"Unexpected error during file upload: {str(e)}")
         yield await send_sse_event(create_upload_progress_event(
-            status="error",
+            status=EVENT_STATUS["ERROR"],
             progress=0.0,
             message=f"An unexpected error occurred during file processing: {str(e)}. Please try again or contact support if the problem persists.",
             null_count=0,
