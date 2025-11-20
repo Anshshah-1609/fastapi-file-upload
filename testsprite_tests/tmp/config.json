@@ -1,0 +1,16 @@
+{
+  "status": "commited",
+  "type": "frontend",
+  "scope": "codebase",
+  "localEndpoint": "http://localhost:8000",
+  "executionArgs": {
+    "projectName": "file-upload-and-fixes",
+    "projectPath": "/home/web-lp-039/python-tutorials/file-upload-and-fixes",
+    "testIds": [],
+    "additionalInstruction": "",
+    "envs": {
+      "API_KEY": "sk-user-LlCjSfmv2BMTCG0AMVLabAu95wlb6b4jxw_WJQvlKMJcJEV1SkbTOgxPnzdEM9wUGt0yGTyZPozlqk45pmcsjwTgH0MY1JimG5lce0jGb6UxQ0PST2951XG_GJ97RIcVMfg"
+    }
+  },
+  "proxy": "http://b31e31e8-c86f-4724-a505-5769b797b1a6:TsrF1MpBTb3Dk7VxVod4xvmgcS1yOSf7@tun.testsprite.com:8080"
+}

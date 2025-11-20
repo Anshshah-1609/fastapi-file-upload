@@ -1,0 +1,510 @@
+[
+  {
+    "id": "TC001",
+    "title": "CSV File Upload Success with Drag-and-Drop",
+    "description": "Verify that users can successfully upload a valid CSV file using drag-and-drop interface respecting size limit.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to the file upload page"
+      },
+      {
+        "type": "action",
+        "description": "Drag and drop a valid CSV file smaller than 10MB into the upload dropzone"
+      },
+      {
+        "type": "assertion",
+        "description": "Check file upload progress is displayed and updates in real-time via SSE"
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm upload completion notification is shown"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify uploaded file metadata is saved with UUID-based filename in backend storage"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify backend API returns 200 status and correct success response"
+      }
+    ]
+  },
+  {
+    "id": "TC002",
+    "title": "CSV File Upload Success with Click-to-Select",
+    "description": "Verify successful CSV file upload via clicking to select the file, validating file format and size.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Go to the file upload page"
+      },
+      {
+        "type": "action",
+        "description": "Click the file selection button"
+      },
+      {
+        "type": "action",
+        "description": "Select a valid CSV file under 10MB"
+      },
+      {
+        "type": "assertion",
+        "description": "Check upload progress visible and updated live via SSE"
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm success message on upload completion"
+      },
+      {
+        "type": "assertion",
+        "description": "Validate file metadata is stored in PostgreSQL with UUID-based filename"
+      },
+      {
+        "type": "assertion",
+        "description": "Ensure backend upload API responds with expected HTTP status and data"
+      }
+    ]
+  },
+  {
+    "id": "TC003",
+    "title": "CSV File Upload Validation - Reject Non-CSV File",
+    "description": "Ensure the frontend rejects files that are not CSV and prevents upload with appropriate error messages.",
+    "category": "error handling",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Attempt to upload a file with an unsupported format (e.g., .txt or .jpg)"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify frontend validation blocks the upload attempt"
+      },
+      {
+        "type": "assertion",
+        "description": "Check that a user-friendly error message is displayed indicating unsupported format"
+      },
+      {
+        "type": "assertion",
+        "description": "Ensure no backend API call is made for upload"
+      }
+    ]
+  },
+  {
+    "id": "TC004",
+    "title": "CSV File Upload Validation - Reject File Exceeding Size Limit",
+    "description": "Verify that files larger than the 10MB limit are blocked from upload with proper notification.",
+    "category": "error handling",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Try uploading a valid CSV file larger than 10MB"
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm frontend prevents upload due to size restriction"
+      },
+      {
+        "type": "assertion",
+        "description": "Check error message indicates file size exceeds allowed maximum"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify no backend upload API request is sent"
+      }
+    ]
+  },
+  {
+    "id": "TC005",
+    "title": "File List Pagination and Search Functionality",
+    "description": "Validate the paginated file list shows correct metadata and supports accurate search filtering by filename.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Upload multiple CSV files to generate a list exceeding one page"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to the file list page"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify that files are listed with correct metadata: name, size, and upload date"
+      },
+      {
+        "type": "action",
+        "description": "Use pagination controls to navigate between pages"
+      },
+      {
+        "type": "assertion",
+        "description": "Ensure correct files are displayed per page and no duplicates in listings"
+      },
+      {
+        "type": "action",
+        "description": "Use the search feature to filter files by partial and full filename"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify only files matching the search query are displayed"
+      },
+      {
+        "type": "assertion",
+        "description": "Check the backend file listing API responds with correct filtered and paginated data"
+      }
+    ]
+  },
+  {
+    "id": "TC006",
+    "title": "File Details Modal Displays Complete Metadata and Analysis",
+    "description": "Check that selecting a file shows detailed metadata, timestamps, file path, and CSV analysis report correctly in a modal.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "From the file list, select a file to open its details modal"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify modal displays accurate file metadata including UUID filename, original name, size, and upload date/time"
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm presence and accuracy of CSV analysis report sections: null counts, duplicate records, and overall data quality metrics"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify data presented matches results generated by pandas analysis on backend"
+      },
+      {
+        "type": "action",
+        "description": "Close the modal and verify UI returns to file list without issues"
+      }
+    ]
+  },
+  {
+    "id": "TC007",
+    "title": "CSV Analysis Report Identifies Nulls and Duplicates Accurately",
+    "description": "Ensure the analysis report correctly detects null values, undefined entries, and duplicate rows in uploaded CSV files.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Upload a CSV file crafted with known null values and duplicate rows"
+      },
+      {
+        "type": "action",
+        "description": "Open the CSV analysis report modal for the uploaded file"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify report identifies and counts null values per column accurately"
+      },
+      {
+        "type": "assertion",
+        "description": "Check that duplicate record detection matches expected duplicates in the file"
+      },
+      {
+        "type": "assertion",
+        "description": "Validate correctness and completeness of other data quality metrics shown"
+      }
+    ]
+  },
+  {
+    "id": "TC008",
+    "title": "File Deletion with Confirmation Removes File and Metadata",
+    "description": "Verify that file deletion prompts user confirmation and successfully deletes file from storage and database.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Select a file in the file list and initiate the delete action"
+      },
+      {
+        "type": "assertion",
+        "description": "Check that a confirmation dialog appears asking user to confirm deletion"
+      },
+      {
+        "type": "action",
+        "description": "Confirm the deletion"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the file metadata entry is removed from PostgreSQL"
+      },
+      {
+        "type": "assertion",
+        "description": "Ensure physical CSV file is deleted from backend storage"
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm file list refreshes to exclude the deleted file"
+      },
+      {
+        "type": "assertion",
+        "description": "Backend deletion API returns proper success status"
+      }
+    ]
+  },
+  {
+    "id": "TC009",
+    "title": "File Deletion Cancel Does Not Remove File",
+    "description": "Ensure that cancelling the deletion confirmation dialog leaves the file intact in storage and database.",
+    "category": "error handling",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Select a file for deletion"
+      },
+      {
+        "type": "assertion",
+        "description": "Observe confirmation dialog appears"
+      },
+      {
+        "type": "action",
+        "description": "Cancel the deletion"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the file still appears in the file list"
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm backend still retains the file record and storage exists"
+      }
+    ]
+  },
+  {
+    "id": "TC010",
+    "title": "Real-Time Progress Updates During Upload and Analysis via SSE",
+    "description": "Test that Server-Sent Events are correctly streamed, received, and rendered as progress updates in the UI for upload and analysis processes.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Start uploading a large valid CSV file"
+      },
+      {
+        "type": "assertion",
+        "description": "Observe live progress updates streamed from backend and rendered in UI"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify progress includes upload percentage and transitions to analysis status dynamically"
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm final completion update is displayed after analysis ends"
+      },
+      {
+        "type": "assertion",
+        "description": "Check SSE connection is gracefully closed on completion or error"
+      }
+    ]
+  },
+  {
+    "id": "TC011",
+    "title": "Backend API Endpoints Return Expected Status Codes and Responses",
+    "description": "Validate all major backend API endpoints (upload, file listing, details, deletion) respond correctly with proper HTTP status codes and data structures.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Perform file upload API call with a valid CSV payload"
+      },
+      {
+        "type": "assertion",
+        "description": "Check response status is 200 and payload contains expected metadata with UUID filename"
+      },
+      {
+        "type": "action",
+        "description": "Call file listing endpoint with and without search parameters"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify paginated response structure and data correctness"
+      },
+      {
+        "type": "action",
+        "description": "Request file details API for specific file"
+      },
+      {
+        "type": "assertion",
+        "description": "Validate detailed file metadata and analysis report data returned"
+      },
+      {
+        "type": "action",
+        "description": "Send file deletion request for existing file"
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm 200 success and backend data removal"
+      },
+      {
+        "type": "action",
+        "description": "Send deletion request for nonexistent file"
+      },
+      {
+        "type": "assertion",
+        "description": "Check proper error status code (e.g., 404) and error message"
+      }
+    ]
+  },
+  {
+    "id": "TC012",
+    "title": "Data Integrity on Upload - Ensure UUID Naming and Metadata Accuracy",
+    "description": "Test data integrity by verifying uploaded files are stored with UUID-based filenames and metadata in database matches uploaded file attributes.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Upload a CSV file"
+      },
+      {
+        "type": "assertion",
+        "description": "Retrieve stored file information from the backend database"
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm physical filename is a UUID not original filename"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify metadata fields (original filename, size, upload timestamp) are accurate and consistent"
+      },
+      {
+        "type": "assertion",
+        "description": "Check no filename conflicts occur on repeated uploads"
+      }
+    ]
+  },
+  {
+    "id": "TC013",
+    "title": "Logging Captures Key Events and Errors",
+    "description": "Ensure important operations and errors during file uploads, deletions, and analysis are logged appropriately for troubleshooting.",
+    "category": "functional",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Trigger file upload process"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify logs record upload start, progress, and completion events"
+      },
+      {
+        "type": "action",
+        "description": "Attempt to upload invalid file format or oversized file"
+      },
+      {
+        "type": "assertion",
+        "description": "Check error logs capture validation failure details"
+      },
+      {
+        "type": "action",
+        "description": "Delete a file"
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm logs record deletion request and success or failure"
+      }
+    ]
+  },
+  {
+    "id": "TC014",
+    "title": "Frontend UI Responsiveness Across Browsers and Devices",
+    "description": "Validate that the application frontend UI renders correctly and behaves consistently on modern browsers and various devices.",
+    "category": "ui",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Open the application on multiple modern browsers (Chrome, Firefox, Edge, Safari)"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify UI layout is consistent and no visual glitches occur"
+      },
+      {
+        "type": "action",
+        "description": "Test on different device sizes including mobile, tablet, and desktop"
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm responsive behavior of components, including drag-and-drop area, tables, modals, and dialogs"
+      },
+      {
+        "type": "assertion",
+        "description": "Ensure touch interactions work correctly on touch-enabled devices"
+      }
+    ]
+  },
+  {
+    "id": "TC015",
+    "title": "Concurrent Uploads and Data Consistency",
+    "description": "Test system behavior when multiple users upload CSV files concurrently ensuring no data corruption or conflict.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Simultaneously initiate multiple CSV file uploads from different clients"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify all files are uploaded with unique UUID filenames"
+      },
+      {
+        "type": "assertion",
+        "description": "Check no metadata collisions in database"
+      },
+      {
+        "type": "assertion",
+        "description": "Observe real-time progress updates correctly streamed independently per client"
+      }
+    ]
+  },
+  {
+    "id": "TC016",
+    "title": "Handling Network Failure During Upload",
+    "description": "Simulate a network interruption during file upload and verify graceful error handling and user notification.",
+    "category": "error handling",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Start uploading a valid CSV file"
+      },
+      {
+        "type": "action",
+        "description": "Cut network connection during upload stream"
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm that the UI shows an error state for upload failure"
+      },
+      {
+        "type": "assertion",
+        "description": "Ensure backend logs capture the failure event"
+      },
+      {
+        "type": "assertion",
+        "description": "Check that incomplete file is not saved or cleaned up properly"
+      }
+    ]
+  }
+]

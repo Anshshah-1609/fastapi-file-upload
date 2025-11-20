@@ -1,0 +1,122 @@
+{
+  "tech_stack": [
+    "Python",
+    "FastAPI",
+    "PostgreSQL",
+    "React",
+    "TypeScript",
+    "Vite",
+    "Tailwind CSS",
+    "React Query",
+    "Axios",
+    "SQLAlchemy",
+    "Pandas",
+    "Uvicorn",
+    "Poetry"
+  ],
+  "features": [
+    {
+      "name": "CSV File Upload",
+      "description": "Upload CSV files with drag-and-drop or click interface. Supports file validation, size checking, and SSE-based progress streaming.",
+      "files": [
+        "client/src/components/CSVDropzone.tsx",
+        "client/src/hooks/useUploadFileWithSSE.ts",
+        "server/app/routers/file_upload.py",
+        "server/app/routers/file.py"
+      ]
+    },
+    {
+      "name": "File List Management",
+      "description": "Display uploaded files in a paginated table with search functionality. Shows file metadata including name, size, upload date.",
+      "files": [
+        "client/src/components/FileListTable.tsx",
+        "client/src/hooks/useFiles.ts",
+        "server/app/routers/file.py"
+      ]
+    },
+    {
+      "name": "File Details Modal",
+      "description": "View detailed information about a specific file including metadata, timestamps, and file path.",
+      "files": [
+        "client/src/components/FileDetailsModal.tsx",
+        "client/src/hooks/useGetFileByReference.ts"
+      ]
+    },
+    {
+      "name": "CSV Analysis Report",
+      "description": "Analyze uploaded CSV files for null values, duplicates, and data quality metrics. Displays comprehensive analysis report with statistics.",
+      "files": [
+        "client/src/components/CSVReportModal.tsx",
+        "server/app/routers/file_upload.py",
+        "server/app/routers/file.py"
+      ]
+    },
+    {
+      "name": "File Deletion",
+      "description": "Delete files from both database and disk storage with confirmation dialog.",
+      "files": [
+        "client/src/components/DeleteFileDialog.tsx",
+        "client/src/hooks/useDeletefile.ts",
+        "server/app/routers/file.py",
+        "server/app/repository/file.py"
+      ]
+    },
+    {
+      "name": "Server-Sent Events (SSE) Upload",
+      "description": "Real-time progress updates during file upload and analysis using Server-Sent Events. Provides live feedback on upload status, analysis progress, and completion.",
+      "files": [
+        "client/src/hooks/useUploadFileWithSSE.ts",
+        "client/src/lib/api.ts",
+        "server/app/routers/file_upload.py"
+      ]
+    },
+    {
+      "name": "Database Models",
+      "description": "SQLAlchemy models for file metadata storage including file information, analysis results, and timestamps.",
+      "files": ["server/app/models/file_model.py"]
+    },
+    {
+      "name": "Repository Pattern",
+      "description": "Data access layer for file operations including CRUD operations, pagination, and search functionality.",
+      "files": ["server/app/repository/file.py"]
+    },
+    {
+      "name": "API Client",
+      "description": "Axios-based API client for frontend-backend communication with typed interfaces for all endpoints.",
+      "files": ["client/src/lib/api.ts"]
+    },
+    {
+      "name": "UI Components",
+      "description": "Reusable UI components including buttons, dialogs, tables, and count-up animations built with Tailwind CSS.",
+      "files": [
+        "client/src/components/ui/button.tsx",
+        "client/src/components/ui/dialog.tsx",
+        "client/src/components/ui/table.tsx",
+        "client/src/components/ui/countUp.tsx"
+      ]
+    },
+    {
+      "name": "Configuration Management",
+      "description": "Application configuration for database, CORS, file upload settings, and environment variables.",
+      "files": ["server/app/configs/app_config.py"]
+    },
+    {
+      "name": "Database Connection",
+      "description": "SQLAlchemy database connection setup, initialization, and session management.",
+      "files": [
+        "server/app/database/connection.py",
+        "server/app/database/__init__.py"
+      ]
+    },
+    {
+      "name": "Logging",
+      "description": "Centralized logging configuration for application-wide logging.",
+      "files": ["server/app/logger/logger.py"]
+    },
+    {
+      "name": "CSV Data Analysis",
+      "description": "Comprehensive CSV analysis using pandas to detect null values, undefined values, and duplicate records across columns.",
+      "files": ["server/app/routers/file_upload.py"]
+    }
+  ]
+}

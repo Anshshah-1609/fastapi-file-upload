@@ -1,0 +1,184 @@
+{
+  "meta": {
+    "project": "File Upload and Management System",
+    "date": "2025-11-19",
+    "prepared_by": "Software Development Manager"
+  },
+  "product_overview": "A full-stack application for uploading, managing, and analyzing CSV files with real-time progress updates and comprehensive data quality reports.",
+  "core_goals": [
+    "Enable users to upload CSV files easily via drag-and-drop or file selection.",
+    "Provide efficient management and browsing of uploaded files with pagination and search.",
+    "Offer detailed metadata and analysis reports for each uploaded file.",
+    "Ensure robust backend support with scalable storage and database management.",
+    "Provide real-time feedback on file upload and analysis progress using Server-Sent Events.",
+    "Maintain data integrity and security through validation and controlled deletion processes."
+  ],
+  "key_features": [
+    "CSV File Upload with drag-and-drop and click interface, including validation and size checks.",
+    "Paginated and searchable file list displaying file metadata such as name, size, and upload date.",
+    "File Details Modal showing detailed metadata, timestamps, and file path for individual files.",
+    "CSV Analysis Report feature that identifies null values, duplicates, and data quality metrics using pandas.",
+    "File Deletion functionality with confirmation dialogs removing files from both database and storage.",
+    "Real-time progress streaming during upload and analysis via Server-Sent Events (SSE).",
+    "Backend API built with FastAPI providing endpoints for file upload, listing, details, and deletion.",
+    "Frontend developed in React with TypeScript using Tailwind CSS for a responsive and modern UI.",
+    "Database management using PostgreSQL with SQLAlchemy ORM and repository pattern for data access.",
+    "Centralized logging, configuration management, and environment variable support for robust operations."
+  ],
+  "user_flow_summary": [
+    "User accesses the application frontend via a modern web UI.",
+    "User uploads a CSV file by dragging it into the dropzone or clicking to select a file.",
+    "Frontend validates the file size and type, then uploads the file to the backend.",
+    "Backend processes and stores the file using a UUID to avoid conflicts and logs metadata in PostgreSQL.",
+    "User views the paginated list of uploaded files, with ability to search by filename.",
+    "User selects a file to see detailed metadata and analysis reports in a modal popup.",
+    "User can delete unwanted files after confirmation, which removes data from both storage and database.",
+    "Throughout upload and analysis, user receives real-time progress updates via SSE displayed on the UI."
+  ],
+  "validation_criteria": [
+    "CSV file uploads must only accept valid CSV format files and respect size limits (default max 10MB).",
+    "Uploaded files are stored with unique UUID-based filenames to prevent conflicts.",
+    "File listings must support pagination and search filtering accurately.",
+    "File details modal displays complete and accurate metadata and analysis statistics.",
+    "CSV analysis reports correctly identify nulls, duplicates, and other data quality issues using pandas.",
+    "File deletion removes entries from the database and deletes the physical file from storage.",
+    "Server-Sent Events provide real-time and smooth progress feedback during upload and analysis.",
+    "API endpoints respond correctly with expected data structures and HTTP status codes.",
+    "Application logs capture key events and errors for troubleshooting.",
+    "Frontend UI is responsive and consistent across modern browsers and devices."
+  ],
+  "code_summary": {
+    "tech_stack": [
+      "Python",
+      "FastAPI",
+      "PostgreSQL",
+      "React",
+      "TypeScript",
+      "Vite",
+      "Tailwind CSS",
+      "React Query",
+      "Axios",
+      "SQLAlchemy",
+      "Pandas",
+      "Uvicorn",
+      "Poetry"
+    ],
+    "features": [
+      {
+        "name": "CSV File Upload",
+        "description": "Upload CSV files with drag-and-drop or click interface. Supports file validation, size checking, and SSE-based progress streaming.",
+        "files": [
+          "client/src/components/CSVDropzone.tsx",
+          "client/src/hooks/useUploadFileWithSSE.ts",
+          "server/app/routers/file_upload.py",
+          "server/app/routers/file.py"
+        ]
+      },
+      {
+        "name": "File List Management",
+        "description": "Display uploaded files in a paginated table with search functionality. Shows file metadata including name, size, upload date.",
+        "files": [
+          "client/src/components/FileListTable.tsx",
+          "client/src/hooks/useFiles.ts",
+          "server/app/routers/file.py"
+        ]
+      },
+      {
+        "name": "File Details Modal",
+        "description": "View detailed information about a specific file including metadata, timestamps, and file path.",
+        "files": [
+          "client/src/components/FileDetailsModal.tsx",
+          "client/src/hooks/useGetFileByReference.ts"
+        ]
+      },
+      {
+        "name": "CSV Analysis Report",
+        "description": "Analyze uploaded CSV files for null values, duplicates, and data quality metrics. Displays comprehensive analysis report with statistics.",
+        "files": [
+          "client/src/components/CSVReportModal.tsx",
+          "server/app/routers/file_upload.py",
+          "server/app/routers/file.py"
+        ]
+      },
+      {
+        "name": "File Deletion",
+        "description": "Delete files from both database and disk storage with confirmation dialog.",
+        "files": [
+          "client/src/components/DeleteFileDialog.tsx",
+          "client/src/hooks/useDeletefile.ts",
+          "server/app/routers/file.py",
+          "server/app/repository/file.py"
+        ]
+      },
+      {
+        "name": "Server-Sent Events (SSE) Upload",
+        "description": "Real-time progress updates during file upload and analysis using Server-Sent Events. Provides live feedback on upload status, analysis progress, and completion.",
+        "files": [
+          "client/src/hooks/useUploadFileWithSSE.ts",
+          "client/src/lib/api.ts",
+          "server/app/routers/file_upload.py"
+        ]
+      },
+      {
+        "name": "Database Models",
+        "description": "SQLAlchemy models for file metadata storage including file information, analysis results, and timestamps.",
+        "files": [
+          "server/app/models/file_model.py"
+        ]
+      },
+      {
+        "name": "Repository Pattern",
+        "description": "Data access layer for file operations including CRUD operations, pagination, and search functionality.",
+        "files": [
+          "server/app/repository/file.py"
+        ]
+      },
+      {
+        "name": "API Client",
+        "description": "Axios-based API client for frontend-backend communication with typed interfaces for all endpoints.",
+        "files": [
+          "client/src/lib/api.ts"
+        ]
+      },
+      {
+        "name": "UI Components",
+        "description": "Reusable UI components including buttons, dialogs, tables, and count-up animations built with Tailwind CSS.",
+        "files": [
+          "client/src/components/ui/button.tsx",
+          "client/src/components/ui/dialog.tsx",
+          "client/src/components/ui/table.tsx",
+          "client/src/components/ui/countUp.tsx"
+        ]
+      },
+      {
+        "name": "Configuration Management",
+        "description": "Application configuration for database, CORS, file upload settings, and environment variables.",
+        "files": [
+          "server/app/configs/app_config.py"
+        ]
+      },
+      {
+        "name": "Database Connection",
+        "description": "SQLAlchemy database connection setup, initialization, and session management.",
+        "files": [
+          "server/app/database/connection.py",
+          "server/app/database/__init__.py"
+        ]
+      },
+      {
+        "name": "Logging",
+        "description": "Centralized logging configuration for application-wide logging.",
+        "files": [
+          "server/app/logger/logger.py"
+        ]
+      },
+      {
+        "name": "CSV Data Analysis",
+        "description": "Comprehensive CSV analysis using pandas to detect null values, undefined values, and duplicate records across columns.",
+        "files": [
+          "server/app/routers/file_upload.py"
+        ]
+      }
+    ]
+  }
+}
