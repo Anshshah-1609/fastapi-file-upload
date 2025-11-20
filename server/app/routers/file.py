@@ -2,6 +2,7 @@
 
 import uuid
 import math
+import pandas as pd
 from pathlib import Path
 from fastapi import APIRouter, File, UploadFile, HTTPException, Depends, Query
 from sqlalchemy.orm import Session
@@ -17,9 +18,12 @@ from app.repository import (
     get_by_reference,
     create,
     remove,
-    update_null_count,
-    update_null_count_by_id
+    # update_null_count,
+    # update_null_count_by_id
 )
+
+logger = get_logger(__name__)
+
 
 router = APIRouter(prefix="/api/files", tags=["Files"])
 
@@ -259,6 +263,106 @@ def get_file_report_by_reference(
 #         file_reference=file.file_reference or "",
 #         null_count=file.null_count
 #     )
+
+
+@router.get("/{file_id}/preview", response_model=schemas.CSVPreviewResponse)
+def get_file_preview(
+    file_id: int,
+    limit: int = Query(
+        10, ge=1, le=100, description="Number of records to preview"),
+    db: Session = Depends(get_db)
+):
+    """
+    Get a preview of the first N records from a CSV file.
+
+    - Returns the first N records (default 10, max 100) from the CSV file
+    - Includes column names and data as key-value pairs
+    - Returns 404 if file not found
+    - Returns 400 if file cannot be read or parsed
+    """
+
+    # Get file from database
+    file = get_by_id(db, file_id)
+    if not file:
+        raise HTTPException(
+            status_code=404,
+            detail=f"File with ID {file_id} not found"
+        )
+
+    # Check if file exists on disk
+    file_path = Path(file.file_path)
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"File not found on disk: {file.file_path}"
+        )
+
+    try:
+        # Read CSV file using pandas
+        logger.debug(f"Reading CSV file for preview: {file_path}")
+
+        # First, read just the preview rows
+        df_preview = pd.read_csv(file_path, nrows=limit)
+
+        # Get total row count efficiently
+        # Read the file in chunks to count rows without loading everything into memory
+        total_rows = 0
+        try:
+            for chunk in pd.read_csv(file_path, chunksize=1000):
+                total_rows += len(chunk)
+        except Exception:
+            # Fallback: count lines in file
+            with open(file_path, 'r', encoding='utf-8') as f:
+                total_rows = sum(1 for _ in f) - 1  # Subtract header row
+
+        # Convert NaN values to None for JSON serialization
+        df_preview = df_preview.where(pd.notna(df_preview), None)
+
+        # Get column names
+        columns = df_preview.columns.tolist()
+
+        # Convert DataFrame to list of dictionaries
+        records = df_preview.to_dict(orient='records')
+
+        # Convert all values to strings or None for JSON serialization
+        formatted_records = []
+        for record in records:
+            formatted_record = {}
+            for key, value in record.items():
+                if value is None or pd.isna(value):
+                    formatted_record[key] = None
+                else:
+                    formatted_record[key] = str(value)
+            formatted_records.append(formatted_record)
+
+        logger.info(
+            f"CSV preview generated: {len(formatted_records)} records from {total_rows} total rows")
+
+        return schemas.CSVPreviewResponse(
+            file_id=file.id,
+            columns=columns,
+            records=formatted_records,
+            total_rows=total_rows,
+            preview_count=len(formatted_records)
+        )
+    except pd.errors.EmptyDataError:
+        logger.error(f"CSV file is empty: {file_path}")
+        raise HTTPException(
+            status_code=400,
+            detail="CSV file is empty or cannot be parsed"
+        )
+    except pd.errors.ParserError as e:
+        logger.error(f"Failed to parse CSV file {file_path}: {str(e)}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to parse CSV file: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"Error reading CSV file {file_path}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to read CSV file: {str(e)}"
+        )
 
 
 @router.delete("/{file_id}")

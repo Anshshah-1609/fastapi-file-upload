@@ -7,12 +7,12 @@ import {
 } from "react";
 import { useDropzone } from "react-dropzone";
 import { Upload, FileText, AlertCircle, CheckCircle2, X } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useUploadFileWithSSE } from "@/hooks/useUploadFileWithSSE";
 import { cn } from "@/lib/utils";
 import { CSVReportModal } from "./CSVReportModal";
 import { CountUp } from "./ui/countUp";
-import { toast } from "sonner";
 
 export const CSVDropzone = () => {
   const [error, setError] = useState<string | null>(null);

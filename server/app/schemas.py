@@ -87,3 +87,12 @@ class CSVReportResponse(BaseModel):
     duplicate_records: Dict[str, int] | None = None
     time_consumption: str  # Time in seconds as string
     created_at: datetime
+
+
+class CSVPreviewResponse(BaseModel):
+    """Response schema for CSV preview (first 10 records)."""
+    file_id: int
+    columns: list[str]  # Column names
+    records: list[Dict[str, str | None]]  # First 10 records as dictionaries
+    total_rows: int  # Total number of rows in the CSV
+    preview_count: int  # Number of records in preview (max 10)

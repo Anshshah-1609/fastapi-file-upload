@@ -23,7 +23,81 @@ router = APIRouter(prefix="/api/files", tags=["Files"])
 
 
 # ============================================================================
-# HELPER FUNCTIONS FOR FILE UPLOAD WITH SSE
+# UTILITY FUNCTIONS
+# ============================================================================
+
+def round_progress(progress: float) -> float:
+    """Round progress value to 2 decimal places."""
+
+    return round(progress, 2)
+
+
+async def send_sse_event(data: dict) -> str:
+    """Format data as SSE event."""
+
+    # Round progress to 2 decimal places
+    if "progress" in data and data["progress"] is not None:
+        data["progress"] = round_progress(data["progress"])
+    json_data = json.dumps(data)
+    return f"data: {json_data}\n\n"
+
+
+def create_upload_progress_event(
+    status: str,
+    progress: float,
+    message: str,
+    file_id: int | None = None,
+    file_reference: str | None = None,
+    **kwargs
+) -> dict:
+    """
+    Create a standardized SSE progress event dictionary.
+
+    Args:
+        status: Current status ("uploading", "analyzing", "completed", "error")
+        progress: Progress value between 0.0 and 1.0
+        message: Human-readable status message
+        file_id: Optional file ID
+        file_reference: Optional file reference UUID
+        **kwargs: Additional fields to include in the event
+
+    Returns:
+        Dictionary ready to be sent as SSE event
+    """
+    event = {
+        "status": status,
+        "progress": round_progress(progress),
+        "message": message,
+        "null_count": kwargs.get("null_count", 0),
+        "processed_count": kwargs.get("processed_count", 0),
+        "total_rows": kwargs.get("total_rows"),
+    }
+
+    # Add optional fields if provided
+    if file_id is not None:
+        event["file_id"] = file_id
+    if file_reference is not None:
+        event["file_reference"] = file_reference
+    if "total_columns" in kwargs:
+        event["total_columns"] = kwargs["total_columns"]
+    if "duplicate_records" in kwargs:
+        event["duplicate_records"] = kwargs["duplicate_records"]
+    if "time_consumption" in kwargs:
+        event["time_consumption"] = kwargs["time_consumption"]
+    if "original_filename" in kwargs:
+        event["original_filename"] = kwargs["original_filename"]
+    if "stored_filename" in kwargs:
+        event["stored_filename"] = kwargs["stored_filename"]
+    if "file_size" in kwargs:
+        event["file_size"] = kwargs["file_size"]
+    if "file_path" in kwargs:
+        event["file_path"] = kwargs["file_path"]
+
+    return event
+
+
+# ============================================================================
+# VALIDATION FUNCTIONS
 # ============================================================================
 
 def validate_csv_file(file: UploadFile) -> None:
@@ -74,21 +148,9 @@ def validate_file_size(file_size: int) -> None:
     logger.info(f"File size validation successful: {file_size_mb:.2f} MB")
 
 
-def round_progress(progress: float) -> float:
-    """Round progress value to 2 decimal places."""
-
-    return round(progress, 2)
-
-
-async def send_sse_event(data: dict) -> str:
-    """Format data as SSE event."""
-
-    # Round progress to 2 decimal places
-    if "progress" in data and data["progress"] is not None:
-        data["progress"] = round_progress(data["progress"])
-    json_data = json.dumps(data)
-    return f"data: {json_data}\n\n"
-
+# ============================================================================
+# CSV ANALYSIS FUNCTION
+# ============================================================================
 
 async def analyze_csv_for_nulls_and_duplicates(
     file_path: Path,
@@ -133,8 +195,7 @@ async def analyze_csv_for_nulls_and_duplicates(
 
     try:
         df = pd.read_csv(file_path)
-        total_rows = len(df)
-        total_columns = len(df.columns)
+        total_rows, total_columns = df.shape
         logger.info(
             f"CSV file loaded successfully: {total_rows} rows, {total_columns} columns")
     except Exception as e:
@@ -182,7 +243,7 @@ async def analyze_csv_for_nulls_and_duplicates(
             column_progress = 0.4 + (0.4 * (idx + 1) / total_object_columns)
             await update_callback({
                 "status": "analyzing",
-                "progress": round_progress(min(column_progress, 0.8)),
+                "progress": min(column_progress, 0.8),
                 "message": f"Examining column {idx + 1} of {total_object_columns}: '{col}' for string-based null representations...",
                 "null_count": int(null_mask.sum()),
                 "processed_count": total_rows,  # All rows processed for this column
@@ -301,59 +362,9 @@ async def analyze_csv_for_nulls_and_duplicates(
     return int(null_count), int(total_rows), int(total_columns), duplicate_records
 
 
-def create_upload_progress_event(
-    status: str,
-    progress: float,
-    message: str,
-    file_id: int | None = None,
-    file_reference: str | None = None,
-    **kwargs
-) -> dict:
-    """
-    Create a standardized SSE progress event dictionary.
-
-    Args:
-        status: Current status ("uploading", "analyzing", "completed", "error")
-        progress: Progress value between 0.0 and 1.0
-        message: Human-readable status message
-        file_id: Optional file ID
-        file_reference: Optional file reference UUID
-        **kwargs: Additional fields to include in the event
-
-    Returns:
-        Dictionary ready to be sent as SSE event
-    """
-    event = {
-        "status": status,
-        "progress": round_progress(progress),
-        "message": message,
-        "null_count": kwargs.get("null_count", 0),
-        "processed_count": kwargs.get("processed_count", 0),
-        "total_rows": kwargs.get("total_rows"),
-    }
-
-    # Add optional fields if provided
-    if file_id is not None:
-        event["file_id"] = file_id
-    if file_reference is not None:
-        event["file_reference"] = file_reference
-    if "total_columns" in kwargs:
-        event["total_columns"] = kwargs["total_columns"]
-    if "duplicate_records" in kwargs:
-        event["duplicate_records"] = kwargs["duplicate_records"]
-    if "time_consumption" in kwargs:
-        event["time_consumption"] = kwargs["time_consumption"]
-    if "original_filename" in kwargs:
-        event["original_filename"] = kwargs["original_filename"]
-    if "stored_filename" in kwargs:
-        event["stored_filename"] = kwargs["stored_filename"]
-    if "file_size" in kwargs:
-        event["file_size"] = kwargs["file_size"]
-    if "file_path" in kwargs:
-        event["file_path"] = kwargs["file_path"]
-
-    return event
-
+# ============================================================================
+# PHASE FUNCTIONS (IN EXECUTION ORDER)
+# ============================================================================
 
 async def validate_and_read_file(
     file: UploadFile,
@@ -708,6 +719,10 @@ async def update_analysis_results_in_db(
             f"Failed to update analysis data in database for file ID {db_file.id}: {str(db_error)}",
         )
 
+
+# ============================================================================
+# MAIN ORCHESTRATOR FUNCTION
+# ============================================================================
 
 async def upload_file_with_sse_stream(
     file: UploadFile,

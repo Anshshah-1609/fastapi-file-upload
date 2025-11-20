@@ -72,6 +72,14 @@ export interface SSEUploadProgress {
   time_consumption?: number;
 }
 
+export interface CSVPreviewResponse {
+  file_id: number;
+  columns: string[];
+  records: Record<string, string | null>[];
+  total_rows: number;
+  preview_count: number;
+}
+
 export const fileApi = {
   uploadFile: async (file: File): Promise<UploadResponse> => {
     const formData = new FormData();
@@ -114,6 +122,19 @@ export const fileApi = {
   ): Promise<CSVReportResponse> => {
     const response = await api.get<CSVReportResponse>(
       `/api/files/reference/${fileReference}/report`
+    );
+    return response.data;
+  },
+
+  getFilePreview: async (
+    fileId: number,
+    limit: number = 10
+  ): Promise<CSVPreviewResponse> => {
+    const response = await api.get<CSVPreviewResponse>(
+      `/api/files/${fileId}/preview`,
+      {
+        params: { limit },
+      }
     );
     return response.data;
   },
