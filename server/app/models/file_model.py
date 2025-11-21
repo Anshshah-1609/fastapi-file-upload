@@ -52,8 +52,9 @@ class FileModel(Base):
     # Duplicate records count per column
     # Format: {"column_name": count, ...} e.g., {"email": 10, "phone": 22}
     duplicate_records = Column(JSONEncodedDict, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow,
+    created_at = Column(DateTime(timezone=True),
+                        default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow,
                         onupdate=datetime.utcnow, nullable=False)
 
     def __repr__(self) -> str:

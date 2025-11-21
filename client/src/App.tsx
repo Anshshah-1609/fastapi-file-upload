@@ -29,11 +29,11 @@ const App = () => {
                   </div>
                   <div>
                     <h1 className="text-4xl font-bold tracking-tight bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-                      CSV File Upload
+                      CSV, XLSX, or JSON File Upload
                     </h1>
                     <p className="text-slate-600 mt-1.5 flex items-center gap-2">
                       <FileText className="h-4 w-4 text-slate-400" />
-                      Upload and manage your CSV files with ease
+                      Upload and manage your CSV, XLSX, or JSON files with ease
                     </p>
                   </div>
                 </div>
@@ -50,7 +50,7 @@ const App = () => {
                       <Upload className="h-5 w-5 text-blue-600" />
                     </div>
                     <h2 className="text-2xl font-semibold text-slate-900">
-                      Upload CSV File
+                      Upload CSV, XLSX, or JSON File
                     </h2>
                   </div>
                   <CSVDropzone />

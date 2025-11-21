@@ -90,8 +90,14 @@ export const CSVDropzone = () => {
     const file = acceptedFiles[0];
 
     // Validate file extension
-    if (!file.name.toLowerCase().endsWith(".csv")) {
-      setError("Only CSV files are allowed");
+    const fileExtension = file.name.toLowerCase();
+    const supportedExtensions = [".csv", ".xlsx", ".json"];
+    const isValidExtension = supportedExtensions.some((ext) =>
+      fileExtension.endsWith(ext)
+    );
+
+    if (!isValidExtension) {
+      setError("Only CSV, XLSX, and JSON files are allowed");
       return;
     }
 
@@ -130,6 +136,11 @@ export const CSVDropzone = () => {
     accept: {
       "text/csv": [".csv"],
       "application/vnd.ms-excel": [".csv"],
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [
+        ".xlsx",
+      ],
+      "application/json": [".json"],
+      "text/json": [".json"],
     },
     maxFiles: 1,
     disabled: uploadFileWithSSE.isUploading || !!selectedFile,
@@ -137,7 +148,7 @@ export const CSVDropzone = () => {
       if (fileRejections.length > 0) {
         const rejection = fileRejections[0];
         if (rejection.errors.some((e) => e.code === "file-invalid-type")) {
-          setError("Only CSV files are allowed");
+          setError("Only CSV, XLSX, and JSON files are allowed");
         } else {
           setError("File rejected. Please try again.");
         }
@@ -179,16 +190,16 @@ export const CSVDropzone = () => {
             <div>
               <p className="text-sm font-medium">
                 {isDragActive
-                  ? "Drop the CSV file here"
-                  : "Drag & drop a CSV file here, or click to select"}
+                  ? "Drop the file here"
+                  : "Drag & drop a file here, or click to select"}
               </p>
               <p className="text-xs text-muted-foreground mt-2">
-                Only CSV files are accepted
+                CSV, XLSX, and JSON files are accepted
               </p>
             </div>
             <Button type="button" variant="outline" size="sm">
               <FileText className="h-4 w-4" />
-              Select CSV File
+              Select File
             </Button>
           </div>
         </div>
@@ -248,7 +259,7 @@ export const CSVDropzone = () => {
                 {progress.status === "uploading"
                   ? "Uploading..."
                   : progress.status === "analyzing"
-                  ? "Analyzing CSV..."
+                  ? "Analyzing file..."
                   : "Processing..."}
               </span>
               <span className="text-muted-foreground">

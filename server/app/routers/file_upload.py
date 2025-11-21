@@ -37,11 +37,21 @@ EVENT_STATUS = {
     "COMPLETED": "completed",
     "ERROR": "error",
 }
-
+CONTENT_TYPE_MAP = {
+    ".csv": "text/csv",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".json": "application/json"
+}
+FILE_TYPE_DISPLAY = {
+    "csv": "CSV",
+    "xlsx": "XLSX",
+    "json": "JSON"
+}
 
 # ============================================================================
 # UTILITY FUNCTIONS
 # ============================================================================
+
 
 def round_progress(progress: float) -> float:
     """Round progress value to 2 decimal places."""
@@ -203,10 +213,14 @@ async def track_memory_async(func, *args, **kwargs):
 # VALIDATION FUNCTIONS
 # ============================================================================
 
-def validate_csv_file(file: UploadFile) -> None:
-    """ Validate that the uploaded file is a CSV file. """
+def validate_file_type(file: UploadFile) -> str:
+    """
+    Validate that the uploaded file is a supported file type (CSV, XLSX, or JSON).
 
-    logger.debug(f"Validating CSV file: {file.filename}")
+    Returns:
+        File type string: "csv", "xlsx", or "json"
+    """
+    logger.debug(f"Validating file: {file.filename}")
 
     if not file.filename:
         logger.error("File validation failed: Filename is required")
@@ -215,22 +229,38 @@ def validate_csv_file(file: UploadFile) -> None:
 
     # Check file extension
     file_extension = Path(file.filename).suffix.lower()
-    if file_extension != ".csv":
+    supported_extensions = {".csv": "csv", ".xlsx": "xlsx", ".json": "json"}
+
+    if file_extension not in supported_extensions:
         logger.error(
             f"File validation failed: Invalid file extension '{file_extension}' for file '{file.filename}'")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Only CSV files are allowed. Received: {file_extension}"
+            detail=f"Only CSV, XLSX, and JSON files are allowed. Received: {file_extension}"
         )
 
-    # Check content type
-    if file.content_type not in ["text/csv", "application/csv", "text/plain"]:
-        # Some browsers might send different content types, so we'll be lenient
-        # but still check the extension
-        logger.debug(
-            f"Content type '{file.content_type}' not in standard CSV types, but extension is valid")
+    file_type = supported_extensions[file_extension]
 
-    logger.info(f"File validation successful: {file.filename}")
+    # Check content type (lenient - extension is primary validation)
+    csv_content_types = ["text/csv", "application/csv", "text/plain"]
+    xlsx_content_types = [
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel"]
+    json_content_types = ["application/json", "text/json"]
+
+    all_valid_types = csv_content_types + xlsx_content_types + json_content_types
+
+    if file.content_type and file.content_type not in all_valid_types:
+        logger.debug(
+            f"Content type '{file.content_type}' not in standard types, but extension is valid")
+
+    logger.info(
+        f"File validation successful: {file.filename} (type: {file_type})")
+    return file_type
+
+
+def validate_csv_file(file: UploadFile) -> None:
+    """ Validate that the uploaded file is a CSV file. (Deprecated - use validate_file_type instead) """
+    validate_file_type(file)
 
 
 def validate_file_size(file_size: int) -> None:
@@ -697,8 +727,492 @@ async def analyze_csv_for_nulls_and_duplicates_chunked(
 
 
 # ============================================================================
+# XLSX ANALYSIS FUNCTION - CHUNKED BASED
+# ============================================================================
+
+
+async def analyze_xlsx_for_nulls_and_duplicates_chunked(
+    file_path: Path,
+    update_callback=None,
+    update_interval: float = 0.1,
+    chunk_size: int = CHUNK_SIZE,
+) -> tuple[int, int, int, dict[str, int]]:
+    """
+    Chunked XLSX analysis for null/undefined detection and per-column duplicate counts.
+    Sends progress updates during analysis if update_callback is provided.
+
+    Similar to analyze_csv_for_nulls_and_duplicates_chunked but processes Excel files.
+    Processes large files in chunks to avoid memory issues.
+
+    Args:
+        file_path: Path to the XLSX file
+        update_callback: Optional async function to call with progress updates
+        update_interval: Interval in seconds between progress updates
+        chunk_size: Number of rows to process per chunk
+
+    Returns:
+        Tuple of (null_count, total_rows, total_columns, duplicate_records) where:
+        - null_count is the number of rows containing at least one null/undefined value
+        - total_rows is the total number of rows in the XLSX
+        - total_columns is the total number of columns in the XLSX
+        - duplicate_records is a dict with column_name as key and duplicate count as value
+    """
+    logger.info(f"Starting chunked XLSX analysis for file: {file_path}")
+
+    null_like_values = {"null", "none", "undefined", "nan", ""}
+    null_like_values = {v.lower() for v in null_like_values}
+
+    # Step 1: Read XLSX file structure
+    logger.debug("Step 1: Reading XLSX file structure")
+    if update_callback:
+        await update_callback({
+            "status": EVENT_STATUS["ANALYZING"],
+            "progress": 0.1,
+            "message": "Reading and parsing XLSX file structure...",
+            "null_count": 0,
+            "processed_count": 0,
+            "total_rows": None
+        })
+        await asyncio.sleep(update_interval)
+
+    # Read the entire Excel file first to get structure (Excel files are typically smaller)
+    # For very large Excel files, we'll still process in chunks
+    try:
+        # Read first few rows to get structure
+        df_sample = pd.read_excel(file_path, nrows=100, engine='openpyxl')
+        total_columns = len(df_sample.columns)
+        logger.info(f"XLSX file has {total_columns} columns")
+
+        # Get total row count by reading the full file (this might be memory intensive for very large files)
+        # For better performance, we could use openpyxl directly, but pandas is simpler
+        df_full = pd.read_excel(file_path, engine='openpyxl')
+        total_rows = len(df_full)
+        logger.info(f"XLSX file row count: {total_rows:,} rows")
+    except Exception as e:
+        logger.error(f"Failed to read XLSX file {file_path}: {str(e)}")
+        raise
+
+    # Step 2: Initialize chunked processing
+    logger.debug("Step 2: Initializing chunked processing")
+    if update_callback:
+        await update_callback({
+            "status": EVENT_STATUS["ANALYZING"],
+            "progress": 0.2,
+            "message": f"XLSX file structure loaded. Beginning comprehensive chunked analysis of {total_rows:,} rows..." if total_rows else "XLSX file structure loaded. Beginning comprehensive chunked analysis...",
+            "null_count": 0,
+            "processed_count": 0,
+            "total_rows": total_rows,
+            "total_columns": total_columns
+        })
+        await asyncio.sleep(update_interval)
+
+    if update_callback:
+        await update_callback({
+            "status": EVENT_STATUS["ANALYZING"],
+            "progress": 0.3,
+            "message": f"Scanning dataset for missing values across {total_columns} columns...",
+            "null_count": 0,
+            "processed_count": 0,
+            "total_rows": total_rows,
+            "total_columns": total_columns
+        })
+        await asyncio.sleep(update_interval)
+
+    # -------------------------------------------
+    # Tracking variables
+    # -------------------------------------------
+    null_row_count = 0
+    processed_rows = 0
+    duplicate_counts: dict[str, int] = {}
+    seen_hashes: dict[str, set] = {}
+
+    # Process in chunks
+    total_chunks = (total_rows + chunk_size -
+                    1) // chunk_size  # Ceiling division
+    logger.debug(
+        f"Processing {total_chunks} chunks of up to {chunk_size:,} rows each")
+
+    # Step 3: Process chunks for null detection and duplicate detection
+    for chunk_idx in range(total_chunks):
+        start_row = chunk_idx * chunk_size
+        end_row = min(start_row + chunk_size, total_rows)
+
+        # Read chunk from the already loaded dataframe
+        chunk = df_full.iloc[start_row:end_row].copy()
+
+        # NULL DETECTION
+        pandas_null_mask = chunk.isnull().any(axis=1) | chunk.isna().any(axis=1)
+        combined_mask = pandas_null_mask.copy()
+
+        # Check for string representations of null/undefined in object columns
+        for col in chunk.columns:
+            if chunk[col].dtype == 'object':
+                ser = chunk[col]
+                lower_strings = ser.astype(str).str.strip().str.lower()
+                combined_mask |= lower_strings.isin(null_like_values)
+
+        chunk_null_rows = int(combined_mask.sum())
+        null_row_count += chunk_null_rows
+
+        # DUPLICATE DETECTION
+        for col in chunk.columns:
+            if col not in seen_hashes:
+                seen_hashes[col] = set()
+                duplicate_counts[col] = 0
+
+            for val in chunk[col]:
+                if pd.isna(val):
+                    continue
+
+                sval = str(val).strip()
+                if not sval or sval.lower() in null_like_values:
+                    continue
+
+                h = hash(sval) & ((1 << 63) - 1)
+
+                if h in seen_hashes[col]:
+                    duplicate_counts[col] += 1
+                else:
+                    seen_hashes[col].add(h)
+
+        processed_rows += len(chunk)
+
+        # Calculate progress: 0.3 (initial) to 0.85 (before finalization)
+        # Progress range: 0.3 to 0.85 = 0.55 range
+        logger.debug(f"Chunk progress: {chunk_idx + 1} of {total_chunks}")
+        if total_chunks > 0:
+            chunk_progress = 0.3 + (0.55 * (chunk_idx + 1) / total_chunks)
+        else:
+            chunk_progress = 0.5
+        logger.debug(f"Chunk progress: {chunk_progress}")
+        # Send progress update after each chunk
+        if update_callback:
+            progress_pct = min(chunk_progress, 0.85)
+            await update_callback({
+                "status": EVENT_STATUS["ANALYZING"],
+                "progress": progress_pct,
+                "message": f"Processing chunk {chunk_idx + 1} of {total_chunks} ({processed_rows:,} of {total_rows:,} rows processed). "
+                f"Found {null_row_count:,} rows with null/undefined values so far...",
+                "null_count": int(null_row_count),
+                "processed_count": int(processed_rows),
+                "total_rows": total_rows,
+                "total_columns": total_columns,
+                "duplicate_records": {k: v for k, v in duplicate_counts.items() if v > 0}
+            })
+            await asyncio.sleep(update_interval)
+
+    # Step 4: Duplicate detection summary
+    logger.debug("Step 4: Finalizing duplicate detection results")
+    if update_callback:
+        await update_callback({
+            "status": EVENT_STATUS["ANALYZING"],
+            "progress": 0.85,
+            "message": "Performing final duplicate detection analysis across all columns to identify repeated values...",
+            "null_count": int(null_row_count),
+            "processed_count": int(processed_rows),
+            "total_rows": total_rows,
+            "total_columns": total_columns,
+            "duplicate_records": {k: v for k, v in duplicate_counts.items() if v > 0}
+        })
+        await asyncio.sleep(update_interval)
+
+    # Step 5: Final results summary
+    final_duplicates = {k: v for k, v in duplicate_counts.items() if v > 0}
+    total_duplicate_columns = len(final_duplicates)
+
+    if update_callback:
+        await update_callback({
+            "status": EVENT_STATUS["ANALYZING"],
+            "progress": 0.9,
+            "message": f"Data quality analysis completed successfully. Identified {null_row_count:,} rows containing null or undefined values. "
+            f"Detected duplicate entries in {total_duplicate_columns} column(s). Generating comprehensive report...",
+            "null_count": int(null_row_count),
+            "processed_count": int(processed_rows),
+            "total_rows": total_rows,
+            "total_columns": total_columns,
+            "duplicate_records": final_duplicates
+        })
+        await asyncio.sleep(update_interval)
+
+    logger.info(f"Chunked XLSX analysis complete: {null_row_count} null rows, {processed_rows} total rows, "
+                f"{total_columns} columns, {len(final_duplicates)} columns with duplicates")
+
+    return (
+        int(null_row_count),
+        int(processed_rows),
+        int(total_columns or 0),
+        final_duplicates,
+    )
+
+
+# ============================================================================
+# JSON ANALYSIS FUNCTION - CHUNKED BASED
+# ============================================================================
+
+
+async def analyze_json_for_nulls_and_duplicates_chunked(
+    file_path: Path,
+    update_callback=None,
+    update_interval: float = 0.1,
+    chunk_size: int = CHUNK_SIZE,
+) -> tuple[int, int, int, dict[str, int]]:
+    """
+    Chunked JSON analysis for null/undefined detection and per-column duplicate counts.
+    Sends progress updates during analysis if update_callback is provided.
+
+    Similar to analyze_csv_for_nulls_and_duplicates_chunked but processes JSON files.
+    Supports both JSON arrays and JSON objects. Processes large files in chunks to avoid memory issues.
+
+    Args:
+        file_path: Path to the JSON file
+        update_callback: Optional async function to call with progress updates
+        update_interval: Interval in seconds between progress updates
+        chunk_size: Number of rows to process per chunk
+
+    Returns:
+        Tuple of (null_count, total_rows, total_columns, duplicate_records) where:
+        - null_count is the number of rows containing at least one null/undefined value
+        - total_rows is the total number of rows in the JSON
+        - total_columns is the total number of columns in the JSON
+        - duplicate_records is a dict with column_name as key and duplicate count as value
+    """
+    logger.info(f"Starting chunked JSON analysis for file: {file_path}")
+
+    null_like_values = {"null", "none", "undefined", "nan", ""}
+    null_like_values = {v.lower() for v in null_like_values}
+
+    # Step 1: Read JSON file structure
+    logger.debug("Step 1: Reading JSON file structure")
+    if update_callback:
+        await update_callback({
+            "status": EVENT_STATUS["ANALYZING"],
+            "progress": 0.1,
+            "message": "Reading and parsing JSON file structure...",
+            "null_count": 0,
+            "processed_count": 0,
+            "total_rows": None
+        })
+        await asyncio.sleep(update_interval)
+
+    try:
+        # Try multiple JSON reading strategies
+        df = None
+
+        # Strategy 1: Try reading as JSON array (most common format)
+        # lines=False: A valid single JSON object or list (Default) -> example: [{"a":1},{"a":2}]
+        # lines=True: One JSON object per line (NDJSON) -> example: {"a":1}\n{"a":2}
+        try:
+            df = pd.read_json(file_path, orient='records', lines=False)
+            if not df.empty:
+                logger.debug("Successfully read JSON as array format")
+        except Exception as e1:
+            logger.debug(f"Failed to read as JSON array: {str(e1)}")
+
+            # Strategy 2: Try reading as JSON lines (one JSON object per line)
+            try:
+                df = pd.read_json(file_path, lines=True)
+                if not df.empty:
+                    logger.debug("Successfully read JSON as lines format")
+            except Exception as e2:
+                logger.debug(f"Failed to read as JSON lines: {str(e2)}")
+
+                # Strategy 3: Try reading as a single JSON object or array manually
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        json_data = json.load(f)
+                        if isinstance(json_data, list):
+                            df = pd.DataFrame(json_data)
+                            logger.debug(
+                                "Successfully read JSON as list from file")
+                        elif isinstance(json_data, dict):
+                            # Single object - convert to DataFrame with one row
+                            df = pd.DataFrame([json_data])
+                            logger.debug(
+                                "Successfully read JSON as single object")
+                        else:
+                            raise ValueError(
+                                f"Unsupported JSON format: {type(json_data)}")
+                except Exception as e3:
+                    logger.error(
+                        f"All JSON reading strategies failed. Last error: {str(e3)}")
+                    raise ValueError(
+                        f"Could not parse JSON file. Tried array, lines, and object formats. Error: {str(e3)}")
+
+        if df is None or df.empty:
+            raise ValueError(
+                "JSON file appears to be empty or could not be parsed")
+
+        total_rows = len(df)
+        total_columns = len(df.columns)
+        logger.info(
+            f"JSON file loaded successfully: {total_rows:,} rows, {total_columns} columns")
+    except Exception as e:
+        logger.error(f"Failed to read JSON file {file_path}: {str(e)}")
+        raise
+
+    # Step 2: Initialize chunked processing
+    logger.debug("Step 2: Initializing chunked processing")
+    if update_callback:
+        await update_callback({
+            "status": EVENT_STATUS["ANALYZING"],
+            "progress": 0.2,
+            "message": f"JSON file structure loaded. Beginning comprehensive chunked analysis of {total_rows:,} rows..." if total_rows else "JSON file structure loaded. Beginning comprehensive chunked analysis...",
+            "null_count": 0,
+            "processed_count": 0,
+            "total_rows": total_rows,
+            "total_columns": total_columns
+        })
+        await asyncio.sleep(update_interval)
+
+    if update_callback:
+        await update_callback({
+            "status": EVENT_STATUS["ANALYZING"],
+            "progress": 0.3,
+            "message": f"Scanning dataset for missing values across {total_columns} columns...",
+            "null_count": 0,
+            "processed_count": 0,
+            "total_rows": total_rows,
+            "total_columns": total_columns
+        })
+        await asyncio.sleep(update_interval)
+
+    # -------------------------------------------
+    # Tracking variables
+    # -------------------------------------------
+    null_row_count = 0
+    processed_rows = 0
+    duplicate_counts: dict[str, int] = {}
+    seen_hashes: dict[str, set] = {}
+
+    # Process in chunks
+    total_chunks = (total_rows + chunk_size -
+                    1) // chunk_size  # Ceiling division
+    logger.debug(
+        f"Processing {total_chunks} chunks of up to {chunk_size:,} rows each")
+
+    # Step 3: Process chunks for null detection and duplicate detection
+    for chunk_idx in range(total_chunks):
+        start_row = chunk_idx * chunk_size
+        end_row = min(start_row + chunk_size, total_rows)
+
+        # Get chunk from the dataframe
+        chunk = df.iloc[start_row:end_row].copy()
+
+        # NULL DETECTION
+        pandas_null_mask = chunk.isnull().any(axis=1) | chunk.isna().any(axis=1)
+        combined_mask = pandas_null_mask.copy()
+
+        # Check for string representations of null/undefined in object columns
+        for col in chunk.columns:
+            if chunk[col].dtype == 'object':
+                ser = chunk[col]
+                lower_strings = ser.astype(str).str.strip().str.lower()
+                combined_mask |= lower_strings.isin(null_like_values)
+
+        chunk_null_rows = int(combined_mask.sum())
+        null_row_count += chunk_null_rows
+
+        # DUPLICATE DETECTION
+        for col in chunk.columns:
+            if col not in seen_hashes:
+                seen_hashes[col] = set()
+                duplicate_counts[col] = 0
+
+            for val in chunk[col]:
+                if pd.isna(val):
+                    continue
+
+                sval = str(val).strip()
+                if not sval or sval.lower() in null_like_values:
+                    continue
+
+                h = hash(sval) & ((1 << 63) - 1)
+
+                if h in seen_hashes[col]:
+                    duplicate_counts[col] += 1
+                else:
+                    seen_hashes[col].add(h)
+
+        processed_rows += len(chunk)
+
+        # Calculate progress: 0.3 (initial) to 0.85 (before finalization)
+        # Progress range: 0.3 to 0.85 = 0.55 range
+        logger.debug(f"Chunk progress: {chunk_idx + 1} of {total_chunks}")
+        if total_chunks > 0:
+            chunk_progress = 0.3 + (0.55 * (chunk_idx + 1) / total_chunks)
+        else:
+            chunk_progress = 0.5
+        logger.debug(f"Chunk progress: {chunk_progress}")
+        # Send progress update after each chunk
+        if update_callback:
+            progress_pct = min(chunk_progress, 0.85)
+            await update_callback({
+                "status": EVENT_STATUS["ANALYZING"],
+                "progress": progress_pct,
+                "message": f"Processing chunk {chunk_idx + 1} of {total_chunks} ({processed_rows:,} of {total_rows:,} rows processed). "
+                f"Found {null_row_count:,} rows with null/undefined values so far...",
+                "null_count": int(null_row_count),
+                "processed_count": int(processed_rows),
+                "total_rows": total_rows,
+                "total_columns": total_columns,
+                "duplicate_records": {k: v for k, v in duplicate_counts.items() if v > 0}
+            })
+            await asyncio.sleep(update_interval)
+
+    # Step 4: Duplicate detection summary
+    logger.debug("Step 4: Finalizing duplicate detection results")
+    if update_callback:
+        await update_callback({
+            "status": EVENT_STATUS["ANALYZING"],
+            "progress": 0.85,
+            "message": "Performing final duplicate detection analysis across all columns to identify repeated values...",
+            "null_count": int(null_row_count),
+            "processed_count": int(processed_rows),
+            "total_rows": total_rows,
+            "total_columns": total_columns,
+            "duplicate_records": {k: v for k, v in duplicate_counts.items() if v > 0}
+        })
+        await asyncio.sleep(update_interval)
+
+    # Step 5: Final results summary
+    final_duplicates = {k: v for k, v in duplicate_counts.items() if v > 0}
+    total_duplicate_columns = len(final_duplicates)
+
+    if update_callback:
+        await update_callback({
+            "status": EVENT_STATUS["ANALYZING"],
+            "progress": 0.9,
+            "message": f"Data quality analysis completed successfully. Identified {null_row_count:,} rows containing null or undefined values. "
+            f"Detected duplicate entries in {total_duplicate_columns} column(s). Generating comprehensive report...",
+            "null_count": int(null_row_count),
+            "processed_count": int(processed_rows),
+            "total_rows": total_rows,
+            "total_columns": total_columns,
+            "duplicate_records": final_duplicates
+        })
+        await asyncio.sleep(update_interval)
+
+    logger.info(f"Chunked JSON analysis complete: {null_row_count} null rows, {processed_rows} total rows, "
+                f"{total_columns} columns, {len(final_duplicates)} columns with duplicates")
+
+    return (
+        int(null_row_count),
+        int(processed_rows),
+        int(total_columns or 0),
+        final_duplicates,
+    )
+
+
+ANALYSIS_FUNCTIONS = {
+    "csv": analyze_csv_for_nulls_and_duplicates_chunked,
+    "xlsx": analyze_xlsx_for_nulls_and_duplicates_chunked,
+    "json": analyze_json_for_nulls_and_duplicates_chunked,
+}
+
+# ============================================================================
 # PHASE FUNCTIONS (IN EXECUTION ORDER)
 # ============================================================================
+
 
 async def validate_and_read_file(
     file: UploadFile,
@@ -713,7 +1227,7 @@ async def validate_and_read_file(
         file: The uploaded file
         update_interval: Interval between progress updates
         progress_data: Dictionary to track progress state
-        result: Dictionary to store results (will contain 'content' and 'file_size')
+        result: Dictionary to store results (will contain 'content', 'file_size', and 'file_type')
 
     Yields:
         SSE formatted strings with progress updates
@@ -726,10 +1240,11 @@ async def validate_and_read_file(
     yield await send_sse_event(create_upload_progress_event(
         status=EVENT_STATUS["UPLOADING"],
         progress=0.0,
-        message="Validating file format and ensuring CSV compatibility...",
+        message="Validating file format and ensuring compatibility...",
         **progress_data
     ))
-    validate_csv_file(file)
+    file_type = validate_file_type(file)
+    result["file_type"] = file_type
 
     # Step 2: Read file content
     logger.debug("Phase 1 - Step 2: Reading file content")
@@ -870,12 +1385,17 @@ async def store_file_metadata(
         file_reference = str(uuid.uuid4())
         logger.debug(f"Generated file reference UUID: {file_reference}")
 
+        # Determine content type based on file extension
+        file_extension = Path(file.filename).suffix.lower()
+        default_content_type = CONTENT_TYPE_MAP.get(
+            file_extension, file.content_type or "application/octet-stream")
+
         db_file = FileModel(
             original_filename=file.filename,
             stored_filename=unique_filename,
             file_path=str(file_path),
             file_size=file_size,
-            content_type=file.content_type or "text/csv",
+            content_type=file.content_type or default_content_type,
             file_reference=file_reference,
             null_count=0  # Will be updated after analysis
         )
@@ -901,21 +1421,23 @@ async def store_file_metadata(
         raise
 
 
-async def run_csv_analysis_with_streaming(
+async def run_file_analysis_with_streaming(
     file_path: Path,
+    file_type: str,
     db_file: FileModel,
     update_interval: float,
     progress_data: dict,
     result: dict
 ):
     """
-    Step 9: Analyze CSV file with real-time progress streaming via SSE.
+    Step 9: Analyze file (CSV, XLSX, or JSON) with real-time progress streaming via SSE.
 
     Uses an async queue to stream analysis progress events in real-time
     without buffering delays.
 
     Args:
-        file_path: Path to the CSV file
+        file_path: Path to the file
+        file_type: Type of file ("csv", "xlsx", or "json")
         db_file: Database file model instance
         update_interval: Interval between progress updates
         progress_data: Dictionary to track progress state (modified in place)
@@ -934,7 +1456,7 @@ async def run_csv_analysis_with_streaming(
     peak_memory_mb = 0.0
 
     async def analysis_progress_callback(update_data: dict):
-        """Callback to send progress updates during CSV analysis - streams events in real-time."""
+        """Callback to send progress updates during file analysis - streams events in real-time."""
         nonlocal progress_data, peak_memory_mb
 
         # Update progress data from callback
@@ -953,11 +1475,11 @@ async def run_csv_analysis_with_streaming(
         peak_memory_mb = max(peak_memory_mb, current_memory)
 
         # Create the SSE event with rounded progress
+        default_message = f"Performing comprehensive {FILE_TYPE_DISPLAY.get(file_type, file_type.upper())} data analysis..."
         event_data = create_upload_progress_event(
             status=update_data.get("status", EVENT_STATUS["ANALYZING"]),
             progress=update_data.get("progress", 0.0),
-            message=update_data.get(
-                "message", "Performing comprehensive CSV data analysis..."),
+            message=update_data.get("message", default_message),
             file_id=db_file.id,
             file_reference=db_file.file_reference,
             **progress_data
@@ -983,8 +1505,16 @@ async def run_csv_analysis_with_streaming(
         monitor_task = asyncio.create_task(monitor_memory())
 
         try:
-            logger.debug(f"Starting CSV analysis task for file: {file_path}")
-            null_count, total_rows, total_columns, duplicate_records = await analyze_csv_for_nulls_and_duplicates_chunked(
+            logger.debug(
+                f"Starting {file_type.upper()} analysis task for file: {file_path}")
+
+            # Get the appropriate analysis function
+            if file_type not in ANALYSIS_FUNCTIONS:
+                raise ValueError(f"Unsupported file type: {file_type}")
+
+            analysis_func = ANALYSIS_FUNCTIONS[file_type]
+
+            null_count, total_rows, total_columns, duplicate_records = await analysis_func(
                 file_path,
                 update_callback=analysis_progress_callback,
                 update_interval=update_interval
@@ -998,11 +1528,11 @@ async def run_csv_analysis_with_streaming(
             final_memory = get_current_memory_mb()
             peak_memory_mb = max(peak_memory_mb, final_memory)
 
-            logger.info(f"CSV analysis task completed successfully. Results: {null_count} nulls, "
+            logger.info(f"{file_type.upper()} analysis task completed successfully. Results: {null_count} nulls, "
                         f"{total_rows} rows, {total_columns} columns, {len(duplicate_records)} duplicate columns. "
                         f"Peak memory usage: {peak_memory_mb:.2f} MB")
         except Exception as e:
-            logger.error(f"CSV analysis task failed: {str(e)}")
+            logger.error(f"{file_type.upper()} analysis task failed: {str(e)}")
             analysis_error = e
         finally:
             # Stop memory monitoring
@@ -1105,7 +1635,7 @@ async def upload_file_with_sse_stream(
     2. Reads file content
     3. Saves file to disk
     4. Stores metadata in database
-    5. Analyzes CSV for null values and duplicates
+    5. Analyzes file (CSV, XLSX, or JSON) for null values and duplicates
     6. Updates database with analysis results
     7. Sends completion event
 
@@ -1139,6 +1669,7 @@ async def upload_file_with_sse_stream(
             yield event
         content = phase1_result["content"]
         file_size = phase1_result["file_size"]
+        file_type = phase1_result["file_type"]
 
         # ====================================================================
         # PHASE 2: FILE SAVING (Steps 4-5)
@@ -1180,13 +1711,15 @@ async def upload_file_with_sse_stream(
         await asyncio.sleep(update_interval)
 
         # ====================================================================
-        # PHASE 5: CSV ANALYSIS WITH REAL-TIME STREAMING (Step 9)
+        # PHASE 5: FILE ANALYSIS WITH REAL-TIME STREAMING (Step 9)
         # ====================================================================
-        logger.info(f"Starting CSV analysis phase for file ID: {db_file.id}")
+        file_type_display = {"csv": "CSV", "xlsx": "XLSX", "json": "JSON"}
+        logger.info(
+            f"Starting {file_type_display.get(file_type, file_type.upper())} analysis phase for file ID: {db_file.id}")
         try:
             phase5_result = {}
-            gen4 = run_csv_analysis_with_streaming(
-                file_path, db_file, update_interval, progress_data, phase5_result
+            gen4 = run_file_analysis_with_streaming(
+                file_path, file_type, db_file, update_interval, progress_data, phase5_result
             )
             async for event in gen4:
                 yield event
@@ -1217,8 +1750,9 @@ async def upload_file_with_sse_stream(
             )
 
         except Exception as e:
+            file_type_display = {"csv": "CSV", "xlsx": "XLSX", "json": "JSON"}
             logger.error(
-                f"CSV analysis failed for file ID {db_file.id}: {str(e)}")
+                f"{file_type_display.get(file_type, file_type.upper())} analysis failed for file ID {db_file.id}: {str(e)}")
             yield await send_sse_event(create_upload_progress_event(
                 status=EVENT_STATUS["ERROR"],
                 progress=0.7,
@@ -1290,22 +1824,27 @@ async def upload_file_with_sse(
     db: Session = Depends(get_db)
 ):
     """
-    Upload a CSV file with Server-Sent Events (SSE) progress updates.
+    Upload a file (CSV, XLSX, or JSON) with Server-Sent Events (SSE) progress updates.
 
-    - Validates that the file is a CSV file
+    - Validates that the file is a CSV, XLSX, or JSON file
     - Validates that the file size is less than the maximum allowed size
     - Saves the file with a UUID-based filename
     - Stores file metadata in the database
-    - Analyzes the CSV using cleanlab to detect null/undefined values
+    - Analyzes the file to detect null/undefined values and duplicates
     - Returns progress updates via SSE at specified intervals
     - Returns count of records with null/undefined values
+
+    Supported file types:
+    - CSV (.csv): Comma-separated values files
+    - XLSX (.xlsx): Excel spreadsheet files
+    - JSON (.json): JavaScript Object Notation files (arrays or objects)
 
     The response is a Server-Sent Events stream that sends JSON updates:
     - status: "uploading", "analyzing", "completed", or "error"
     - progress: Float between 0.0 and 1.0
     - message: Human-readable status message
     - On completion: file_id, original_filename, stored_filename, file_size, 
-      file_path, null_count, total_rows
+      file_path, null_count, total_rows, total_columns, duplicate_records
     """
     logger.info(f"Received upload request for file: {file.filename}, "
                 f"content_type: {file.content_type}, update_interval: {update_interval}s")

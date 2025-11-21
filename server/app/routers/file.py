@@ -2,6 +2,7 @@
 
 import uuid
 import math
+import json
 import pandas as pd
 from pathlib import Path
 from fastapi import APIRouter, File, UploadFile, HTTPException, Depends, Query
@@ -274,9 +275,10 @@ def get_file_preview(
     db: Session = Depends(get_db)
 ):
     """
-    Get a preview of the first N records from a CSV file.
+    Get a preview of the first N records from a file (CSV, XLSX, or JSON).
 
-    - Returns the first N records (default 10, max 100) from the CSV file
+    - Returns the first N records (default 10, max 100) from the file
+    - Supports CSV, XLSX, and JSON file formats
     - Includes column names and data as key-value pairs
     - Returns 404 if file not found
     - Returns 400 if file cannot be read or parsed
@@ -298,23 +300,88 @@ def get_file_preview(
             detail=f"File not found on disk: {file.file_path}"
         )
 
+    # Determine file type from extension
+    file_extension = file_path.suffix.lower()
+    file_type = None
+    if file_extension == ".csv":
+        file_type = "csv"
+    elif file_extension == ".xlsx":
+        file_type = "xlsx"
+    elif file_extension == ".json":
+        file_type = "json"
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {file_extension}. Only CSV, XLSX, and JSON files are supported."
+        )
+
     try:
-        # Read CSV file using pandas
-        logger.debug(f"Reading CSV file for preview: {file_path}")
+        logger.debug(
+            f"Reading {file_type.upper()} file for preview: {file_path}")
 
-        # First, read just the preview rows
-        df_preview = pd.read_csv(file_path, nrows=limit)
+        # Read file based on type
+        if file_type == "csv":
+            # Read CSV file using pandas
+            df_preview = pd.read_csv(file_path, nrows=limit)
 
-        # Get total row count efficiently
-        # Read the file in chunks to count rows without loading everything into memory
-        total_rows = 0
-        try:
-            for chunk in pd.read_csv(file_path, chunksize=1000):
-                total_rows += len(chunk)
-        except Exception:
-            # Fallback: count lines in file
-            with open(file_path, 'r', encoding='utf-8') as f:
-                total_rows = sum(1 for _ in f) - 1  # Subtract header row
+            # Get total row count efficiently
+            total_rows = 0
+            try:
+                for chunk in pd.read_csv(file_path, chunksize=1000):
+                    total_rows += len(chunk)
+            except Exception:
+                # Fallback: count lines in file
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    total_rows = sum(1 for _ in f) - 1  # Subtract header row
+
+        elif file_type == "xlsx":
+            # Read XLSX file using pandas
+            df_full = pd.read_excel(file_path, engine='openpyxl')
+            total_rows = len(df_full)
+            # Get preview rows
+            df_preview = df_full.head(limit)
+
+        elif file_type == "json":
+            # Read JSON file using pandas
+            # Try multiple JSON reading strategies
+            df_full = None
+
+            # Strategy 1: Try reading as JSON array
+            try:
+                df_full = pd.read_json(
+                    file_path, orient='records', lines=False)
+                if not df_full.empty:
+                    logger.debug("Successfully read JSON as array format")
+            except Exception:
+                # Strategy 2: Try reading as JSON lines
+                try:
+                    df_full = pd.read_json(file_path, lines=True)
+                    if not df_full.empty:
+                        logger.debug("Successfully read JSON as lines format")
+                except Exception:
+                    # Strategy 3: Try reading as a single JSON object or array manually
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        json_data = json.load(f)
+                        if isinstance(json_data, list):
+                            df_full = pd.DataFrame(json_data)
+                            logger.debug(
+                                "Successfully read JSON as list from file")
+                        elif isinstance(json_data, dict):
+                            # Single object - convert to DataFrame with one row
+                            df_full = pd.DataFrame([json_data])
+                            logger.debug(
+                                "Successfully read JSON as single object")
+                        else:
+                            raise ValueError(
+                                f"Unsupported JSON format: {type(json_data)}")
+
+            if df_full is None or df_full.empty:
+                raise ValueError(
+                    "JSON file appears to be empty or could not be parsed")
+
+            total_rows = len(df_full)
+            # Get preview rows
+            df_preview = df_full.head(limit)
 
         # Convert NaN values to None for JSON serialization
         df_preview = df_preview.where(pd.notna(df_preview), None)
@@ -337,7 +404,7 @@ def get_file_preview(
             formatted_records.append(formatted_record)
 
         logger.info(
-            f"CSV preview generated: {len(formatted_records)} records from {total_rows} total rows")
+            f"{file_type.upper()} preview generated: {len(formatted_records)} records from {total_rows} total rows")
 
         return schemas.CSVPreviewResponse(
             file_id=file.id,
@@ -347,22 +414,31 @@ def get_file_preview(
             preview_count=len(formatted_records)
         )
     except pd.errors.EmptyDataError:
-        logger.error(f"CSV file is empty: {file_path}")
+        logger.error(f"{file_type.upper()} file is empty: {file_path}")
         raise HTTPException(
             status_code=400,
-            detail="CSV file is empty or cannot be parsed"
+            detail=f"{file_type.upper()} file is empty or cannot be parsed"
         )
     except pd.errors.ParserError as e:
-        logger.error(f"Failed to parse CSV file {file_path}: {str(e)}")
+        logger.error(
+            f"Failed to parse {file_type.upper()} file {file_path}: {str(e)}")
         raise HTTPException(
             status_code=400,
-            detail=f"Failed to parse CSV file: {str(e)}"
+            detail=f"Failed to parse {file_type.upper()} file: {str(e)}"
+        )
+    except ValueError as e:
+        logger.error(
+            f"Invalid {file_type.upper()} file format {file_path}: {str(e)}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {file_type.upper()} file format: {str(e)}"
         )
     except Exception as e:
-        logger.error(f"Error reading CSV file {file_path}: {str(e)}")
+        logger.error(
+            f"Error reading {file_type.upper()} file {file_path}: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to read CSV file: {str(e)}"
+            detail=f"Failed to read {file_type.upper()} file: {str(e)}"
         )
 
 
@@ -394,7 +470,6 @@ def delete_file(
         # Re-raise HTTP exceptions (like 404)
         raise e
     except Exception as e:
-        logger = get_logger(__name__)
         logger.error(f"Error deleting file {file_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
